@@ -20,7 +20,7 @@ Overview of Scripts and Data:
 
 **6. Script 03C:** Supplementary Non-Video attention analysis
 
-Note: Directories can be configured at the start of each script based on where the cleaned data is located (located in Learning_Recall folder inside cleaned data folders) 
+Note: Directories can be configured at the start of each script based on where the cleaned data is located (located in Learning_Recall folder inside the cleaned data folders) 
 
 **Memory Task:**
 
