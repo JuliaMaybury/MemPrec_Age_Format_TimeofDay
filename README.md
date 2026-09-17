@@ -19,5 +19,9 @@ Can you please provide me with access to this document
 
 **6. Script 03C:** Supplementary Non-Video attention analysis
 
-Note: Directories can be configured at the start of each script based on where the cleaned data is located. 
+Note: Directories can be configured at the start of each script based on where the cleaned data is located (located in folders Learning_Recall) 
+
+**Memory Task:**
+
+The precision task used for the video and non-video formats is included in the respective folders, with a resource folder containing stimuli used and a conditions folder containing the conditions files (300)
 
