@@ -1,0 +1,6 @@
+obj1,backgr,obj1loc,TrialID,StudyTrialNum,block,testObj1,testObj1Feat1,TestPracTrialNum,testObj1Feat1TargetVal,testObj1LocStartVal1,testObj1LocStartVal2,testObj1LocTargetVal,testObj1Target,testObj1Foil,testObj1FCOrder,testObj1FCleftItem,NewObject,testNewLocStartVal
+cowboyhat1_tr.png,Bckg142.jpg,310,3,1,1,1,,1,310,20,337,310,cowboyhat1_tr.png,,1,Foil,lollipop1_tr.png,156
+cheese1_tr.png,Bckg140.jpg,81,5,2,2,1,,2,81,5,286,81,cheese1_tr.png,,0,Target,mirror1_tr.png,328
+chinesefood1_tr.png,Bckg143.jpg,222,4,3,2,1,,3,222,217,249,222,chinesefood1_tr.png,,1,Foil,pencilholder1_tr.png,66
+minifan1_tr.png,Bckg141.jpg,339,1,4,3,1,,4,339,83,298,339,minifan1_tr.png,,0,Target,remote1_tr.png,95
+blackboard1_tr.png,Bckg139.jpg,230,2,5,4,1,,5,230,160,2,230,blackboard1_tr.png,,1,Foil,rooster1_tr.png,53
