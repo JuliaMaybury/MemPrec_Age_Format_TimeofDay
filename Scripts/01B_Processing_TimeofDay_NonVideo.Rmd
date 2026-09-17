@@ -1,0 +1,880 @@
+---
+title: "Preprosessing and Cleaning of Time of Day Non-Video Format Data"
+author: "Julia Maybury"
+date: '2024-23-10'
+output: html_document
+---
+
+```{r important libraries, include=FALSE}
+# Clear console
+rm(list=ls())
+
+# Default setting. 
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(data.table)
+library(readxl)
+library(reshape2)
+library(lattice)
+library(ggpubr)
+library(broom)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+
+```
+
+```{r set directories, echo=FALSE}
+
+#change path/to/ to where path is located for folders
+
+# Raw data directory:
+# Contains one CSV per participant, straight from the experiment platform.
+Raw_Data_Dir <- "/path/to/Raw_ToD_NonVideoData"
+
+# Cleaned data directory:
+# Contains all processed data, organized into subfolders.
+Clean_Data_Dir <- "/path/to/Cleaned_ToD_NonVideoData"
+
+#
+
+# Learning data folders (after cleaning)
+Learning_dir_YA <- file.path(Clean_Data_Dir, "Learning", "YA")
+Learning_dir_OA <- file.path(Clean_Data_Dir, "Learning", "OA")
+
+# Recall data folders (after cleaning)
+Recall_dir_YA <- file.path(Clean_Data_Dir, "Recall", "YA")
+Recall_dir_OA <- file.path(Clean_Data_Dir, "Recall", "OA")
+
+# Combined Learning + Recall folders
+Learn_Recall_YA <- file.path(Clean_Data_Dir, "Learning_Recall", "YA")
+Learn_Recall_OA <- file.path(Clean_Data_Dir, "Learning_Recall", "OA")
+
+# Age group + condition file (Time of Day, AgeGroup, SubjectID, etc.)
+ageGroup_file <- file.path(Clean_Data_Dir, "AgeGroup_Con_Online.csv")
+
+#if needed to create directories 
+
+# dirs_to_create <- c(
+#   Learning_dir_YA, Learning_dir_OA,
+#   Recall_dir_YA, Recall_dir_OA,
+#   Learn_Recall_YA, Learn_Recall_OA
+# )
+# 
+# for (d in dirs_to_create) {
+#   if (!dir.exists(d)) dir.create(d, recursive = TRUE)
+# }
+
+```
+
+```{r important data set, echo=FALSE}
+
+
+# Get the list of file paths
+list_of_files <- list.files(path = Raw_Data_Dir,
+                            pattern = "\\.csv$", 
+                            full.names = TRUE)
+
+# Extract Prolific IDs from file names
+ProlificIDs <- gsub(".*/data_(\\w+)_.*", "\\1", list_of_files)
+
+# Initialize an empty list to store data tables
+data_list <- list()
+
+# Loop through each file, read, and assign Prolific ID
+for (i in seq_along(list_of_files)) {
+  # Read file
+  data <- fread(list_of_files[i])
+  
+  # Assign Prolific ID to the current data frame
+  data[, ID := ProlificIDs[i]]
+  
+  # Append to list
+  data_list[[i]] <- data
+}
+
+# Combine all data tables into one
+NonVideo_Data <- rbindlist(data_list, use.names = TRUE, fill = TRUE)
+
+ 
+AgeGroup_ToD_Cond<- read.csv(ageGroup_file)
+
+
+```
+
+
+```{r Clean data Learning, echo=FALSE}
+
+
+
+# Initialize an empty dataframe to store all participants' data
+AllParticipants_Learning_Avg <- data.frame(participant = character(),
+                                           subject_ID= character(),
+                                           AgeGroup = character(),
+                                           ToD_Condition = character(),
+                                           Avg_Learning_Loc_Test_rt = numeric(),
+                                           stringsAsFactors = FALSE)
+AllParticipants_Attention <- data.frame(
+  participant = character(),
+   subject_ID= character(),
+  AgeGroup = character(),
+  ToD_Condition = character(),
+  attention1_pass = numeric(),
+  Attention1abutton = numeric(),
+  attention1a_pass = numeric(),
+  attention2_pass = numeric(),
+  Attention2abutton = numeric(),
+  attention2a_pass = numeric(),
+  attention3_pass = numeric(),
+  Attention3abutton = numeric(),
+  attention3a_pass = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Initialize a dataframe to store unique subjects who were updated
+updated_subjects <- data.frame(SubID = character(), stringsAsFactors = FALSE)
+
+for (file in list_of_files) {
+  # Read the data from the CSV file
+  data <- read.csv(file)
+
+  library(dplyr)
+
+  NonVideo_Data.Learning <- data %>%
+    select(participant, condnum, locresp1, locresp1_adj, key_resp_Learn.keys, key_resp_Test.keys, 
+           respposX1, respposY1, respposX2, respposY2, obj1:testNewLocStartVal, 
+           key_respWM_5.rt, key_resp_Prac_Learn.rt, FCKey2_3.keys, FCKey2_3.rt, 
+           key_resp_Learn.rt, key_resp_Test.rt, locresp2, locresp2_adj, 
+           FCKey2_4.keys, FCKey2_4.rt, FCKey2.keys, FCKey2.rt, 
+           FCKey2_2.keys, FCKey2_2.rt, Imm_Delay, NewObject, 
+           attention1_pass, attention2_pass, attention3_pass, 
+           attention1a_pass, attention2a_pass, attention3a_pass, 
+           FCKey2_7.keys, FCKey2_8.keys, FCKey2_9.keys) %>%
+    rename(
+      Learning_Loc_Test_Prac_rt = key_resp_Prac_Learn.rt,
+      Old_New_Prac = FCKey2_3.keys,
+      Old_New_Prac_rt = FCKey2_3.rt,
+      Remember_Prac_Min = FCKey2_4.keys,
+      Remember_Prac_rt = FCKey2_4.rt,
+      Old_New_Test = FCKey2.keys,
+      Old_New_Test_rt = FCKey2.rt,
+      Remember_Test = FCKey2_2.keys,
+      Remember_Test_rt = FCKey2_2.rt,
+      Recall_Loc_Test_Prac_rt = key_respWM_5.rt,
+      Learning_Loc_Test_rt = key_resp_Learn.rt,
+      Recall_Loc_Test_rt = key_resp_Test.rt,
+      Attention1abutton = FCKey2_7.keys,
+      Attention2abutton = FCKey2_8.keys,
+      Attention3abutton = FCKey2_9.keys
+    )
+    
+ # Store original attention2a_pass values for comparison
+    original_attention2a_pass <- NonVideo_Data.Learning$attention2a_pass
+    
+    # Update attention2a_pass based on conditions
+    NonVideo_Data.Learning$attention2a_pass <- ifelse(
+        NonVideo_Data.Learning$Attention2abutton == 1 & 
+        NonVideo_Data.Learning$attention2a_pass == TRUE, 
+        FALSE,  # Change pass to FALSE
+        ifelse(
+            NonVideo_Data.Learning$Attention2abutton == 2 & 
+            NonVideo_Data.Learning$attention2a_pass == FALSE, 
+            TRUE,  # Change pass to TRUE
+            NonVideo_Data.Learning$attention2a_pass  # Keep original value for all other cases
+        )
+    )
+    
+    # Extract unique SubIDs for subjects with any updates in this file
+    temp_updated <- unique(NonVideo_Data.Learning$SubID[
+        NonVideo_Data.Learning$attention2a_pass != original_attention2a_pass
+    ])
+    
+    # Append to updated_subjects with unique IDs only
+    updated_subjects <- unique(rbind(updated_subjects, data.frame(SubID = temp_updated, stringsAsFactors = FALSE)))
+
+
+# Result dataframe:
+# 'updated_subjects' contains a unique list of SubIDs for subjects with changes
+
+  # Get condition number from the fourth row and "condnum" column
+  Condition <- as.integer(unlist(data[4, "condnum"]))
+  NonVideo_Data.Learning$condnum <- rep(Condition, nrow(NonVideo_Data.Learning))
+  
+
+
+# Define attention columns to check and save
+attention_columns <- c("attention1_pass", "attention2_pass", "attention3_pass")
+removed_attention_values <- data.frame()  # Initialize a data frame to store removed values
+
+# Loop over each attention column to identify and adjust rows
+for (col in attention_columns) {
+  non_na_rows <- which(!is.na(NonVideo_Data.Learning[[col]]))
+  
+  for (row in non_na_rows) {
+    if (row < nrow(NonVideo_Data.Learning)) {  # Check to avoid out-of-bounds error
+      # Store only the attention column values from the row that will be removed
+      removed_attention_values <- rbind(removed_attention_values, NonVideo_Data.Learning[row, attention_columns])
+      
+      # Move the next row's data up to the current row for all columns
+      NonVideo_Data.Learning[row, ] <- 
+        ifelse(is.na(NonVideo_Data.Learning[row, ]) | NonVideo_Data.Learning[row, ] == "", 
+               NonVideo_Data.Learning[row + 1, ], 
+               NonVideo_Data.Learning[row, ])
+    }
+  }
+}
+
+# Remove rows that have been shifted up (optional)
+rows_to_remove <- non_na_rows + 1
+rows_to_remove <- rows_to_remove[rows_to_remove <= nrow(NonVideo_Data.Learning)]  # Check bounds
+NonVideo_Data.Learning <- NonVideo_Data.Learning[-rows_to_remove, ]
+
+
+  # Filter and reorganize the data
+  NonVideo_Data.Learning <- NonVideo_Data.Learning %>%
+    filter(key_resp_Learn.keys == "space") %>%
+    filter(Imm_Delay == 1) %>%
+    select(-Old_New_Prac, -Old_New_Prac_rt, -Remember_Prac_Min, -NewObject, -key_resp_Learn.keys, -key_resp_Test.keys, -testNewLocStartVal, -Learning_Loc_Test_Prac_rt, -Recall_Loc_Test_Prac_rt,-attention1_pass,attention2_pass,attention3_pass) %>%
+    relocate(locresp1:locresp1_adj, .after = testObj1Target) %>%
+    relocate(respposX2:respposY2, .before = locresp2) %>%
+    relocate(Old_New_Test_rt, .after = Old_New_Test) %>%
+    relocate(Remember_Test_rt, .after = Remember_Test) %>%
+    relocate(Learning_Loc_Test_rt, .after = locresp1_adj) %>%
+    relocate(Recall_Loc_Test_rt, .after = locresp2_adj)
+  
+  # Replace empty strings with NA
+  NonVideo_Data.Learning[NonVideo_Data.Learning== ""] <- NA
+
+  
+  
+#Getting learning average and also attention data for each participant
+for (subject_ID in unique(NonVideo_Data.Learning$participant)) {
+  
+  # Find the row in the AgeGroup_ToD_Cond data frame that corresponds to this participant
+  participantRow <- AgeGroup_ToD_Cond[AgeGroup_ToD_Cond$participant == subject_ID, ]
+  
+  # Check if participantRow has data
+  if (nrow(participantRow) > 0) {
+    # Extract participant details
+    SubID <- participantRow$SubID[1]
+    AgeGroup <- participantRow$AgeGroup[1]
+    ToD_Condition <- participantRow$ToD_Condition[1]
+    
+    # Filter data for the current participant
+    participant_data <- NonVideo_Data.Learning %>%
+      filter(participant == subject_ID)
+    
+    # Extract attention variables, defaulting to NA if no non-NA values are found
+    attention1_pass <- ifelse(length(na.omit(participant_data$attention1_pass)) > 0, first(na.omit(participant_data$attention1_pass)), NA)
+    Attention1abutton <- ifelse(length(na.omit(participant_data$Attention1abutton)) > 0, first(na.omit(participant_data$Attention1abutton)), NA)
+    attention1a_pass <- ifelse(length(na.omit(participant_data$attention1a_pass)) > 0, first(na.omit(participant_data$attention1a_pass)), NA)
+    
+    attention2_pass <- ifelse(length(na.omit(participant_data$attention2_pass)) > 0, first(na.omit(participant_data$attention2_pass)), NA)
+    Attention2abutton <- ifelse(length(na.omit(participant_data$Attention2abutton)) > 0, first(na.omit(participant_data$Attention2abutton)), NA)
+    attention2a_pass <- ifelse(length(na.omit(participant_data$attention2a_pass)) > 0, first(na.omit(participant_data$attention2a_pass)), NA)
+    
+    attention3_pass <- ifelse(length(na.omit(participant_data$attention3_pass)) > 0, first(na.omit(participant_data$attention3_pass)), NA)
+    Attention3abutton <- ifelse(length(na.omit(participant_data$Attention3abutton)) > 0, first(na.omit(participant_data$Attention3abutton)), NA)
+    attention3a_pass <- ifelse(length(na.omit(participant_data$attention3a_pass)) > 0, first(na.omit(participant_data$attention3a_pass)), NA)
+    
+    # Append this participant's attention data to the main data frame
+    AllParticipants_Attention <- rbind(AllParticipants_Attention,
+                                       data.frame(participant = subject_ID,
+                                                  subject_ID=SubID,
+                                                  AgeGroup = AgeGroup,
+                                                  ToD_Condition = ToD_Condition,
+                                                  attention1_pass = attention1_pass,
+                                                  Attention1abutton = Attention1abutton,
+                                                  attention1a_pass = attention1a_pass,
+                                                  attention2_pass = attention2_pass,
+                                                  Attention2abutton = Attention2abutton,
+                                                  attention2a_pass = attention2a_pass,
+                                                  attention3_pass = attention3_pass,
+                                                  Attention3abutton = Attention3abutton,
+                                                  attention3a_pass = attention3a_pass))
+    
+    # Merge the participant's learning data with AgeGroup and ToD_Condition data and clean up dataframe
+    NonVideo_Data.Learning<- merge(NonVideo_Data.Learning, participantRow, by = "participant", all.x = TRUE)
+      NonVideo_Data.Learning<- NonVideo_Data.Learning%>%
+      relocate(ProlificID:Date,.after=participant)%>%
+      select(-attention2_pass, -attention3_pass,-attention1a_pass,-attention2a_pass,-attention3a_pass,-Attention1abutton,-Attention2abutton,-Attention3abutton) 
+      
+      
+    # Calculate the average Learning_Loc_Test_rt for the participant
+    Avg_Learning_Loc_Test_rt <- mean(NonVideo_Data.Learning$Learning_Loc_Test_rt, na.rm = TRUE)
+    
+    # Append this participant's average learning data to the main data frame
+    AllParticipants_Learning_Avg <- rbind(AllParticipants_Learning_Avg,
+                                          data.frame(participant = subject_ID,
+                                                      subject_ID=SubID,
+                                                     AgeGroup = AgeGroup,
+                                                     ToD_Condition = ToD_Condition,
+                                                     Avg_Learning_Loc_Test_rt = Avg_Learning_Loc_Test_rt))
+    
+    # Write individual participant CSV based on AgeGroup and using SubID for file name
+    if (AgeGroup == "YA") {
+      write.csv(NonVideo_Data.Learning,
+                file = file.path(Learning_dir_YA, paste0(SubID, "_Learning.csv")),
+                row.names = FALSE)
+    } else if (AgeGroup == "OA") {
+      write.csv(NonVideo_Data.Learning,
+                  file = file.path(Learning_dir_OA, paste0(SubID, "_Learning.csv")),
+                row.names = FALSE)
+    }
+  } else {
+    cat('Participant', SubID, 'not found in the data frame.\n')
+  }
+}
+
+
+
+
+# Print the final dataframe with average reaction times
+print(AllParticipants_Learning_Avg)
+
+# Save the combined dataframe to a CSV file (optional)
+write.csv(AllParticipants_Learning_Avg, 
+          "/Users/juliamaybury/Desktop/Cleaned_ToD_Pro_Online_Data/LearningAvg.csv", 
+          row.names = FALSE)
+
+
+print(AllParticipants_Attention)
+
+# Save the combined dataframe to a CSV file (optional)
+write.csv(AllParticipants_Attention, 
+          "/Users/juliamaybury/Desktop/Cleaned_ToD_Pro_Online_Data/AllParticipants_Attention.csv", 
+          row.names = FALSE)
+
+
+}
+
+
+
+```
+
+```{r Clean Data Recall, echo=FALSE}
+
+summary_data <- data.frame()
+# Initialize the Average_ReactionTimes data frame with the required columns
+Average_ReactionTimes <- data.frame(participant = character(),
+                                    Avg_Recall_Loc_Test_rt = numeric(),
+                                    Avg_Old_New_Test_rt = numeric(),
+                                    Avg_Remember_Test_rt = numeric(),
+                                    Avg_Old_Recall_Test_rt = numeric(),
+                                    Avg_New_Recall_Test_rt = numeric(),
+                                    Avg_Obj_Loc_Remember_Test_rt = numeric(),
+                                    Avg_Obj_Remember_Test_rt = numeric(),
+                                    stringsAsFactors = FALSE)
+
+for (i in seq_along(list_of_files)) {
+    # Get the index using modulus operator, adjusted to start from 1
+    index <- (i - 1) %% length(list_of_files) + 1
+    
+    # Get the file name using the index
+    file <- list_of_files[index]
+    
+    # Read the data from the CSV file
+    data <- read.csv(file)
+
+    ### Recall Data 
+
+    library(dplyr) 
+
+    NonVideo_Data.Recall <- data %>%
+        select(
+            participant,
+            condnum,
+            key_resp_Learn.keys,
+            respposX2,
+            respposY2,
+            obj1:testNewLocStartVal,
+            locresp2,
+            locresp2_adj,
+            key_resp_Test.rt,
+            FCKey2.keys,
+            FCKey2.rt,
+            FCKey2_2.keys,
+            FCKey2_2.rt,
+            Imm_Delay,
+            NewObject,
+            attention1_pass,
+            attention2_pass,
+            attention3_pass,
+            attention1a_pass,
+            attention2a_pass,
+            attention3a_pass,
+            ImmediateTest.started
+        ) %>%
+         rename(Old_New_Test = FCKey2.keys,
+               Old_New_Test_rt = FCKey2.rt,
+               Remember_Test = FCKey2_2.keys,
+               Remember_Test_rt = FCKey2_2.rt,
+               Recall_Loc_Test_rt = key_resp_Test.rt) 
+    
+attention_columns <- c("attention1_pass", "attention2_pass", "attention3_pass")
+removed_attention_values <- data.frame()  # Initialize a data frame to store removed values
+rows_to_remove <- integer()  # Initialize a vector to store row indices for removal
+
+# Loop over each attention column to identify and adjust rows
+for (col in attention_columns) {
+  non_na_rows <- which(!is.na(NonVideo_Data.Recall[[col]]))
+  
+  for (row in non_na_rows) {
+    if (row < nrow(NonVideo_Data.Recall)) {  # Check to avoid out-of-bounds error
+      # Store only the attention column values from the row that will be removed
+      removed_attention_values <- rbind(removed_attention_values, NonVideo_Data.Recall[row, attention_columns])
+      
+      # Move the next row's data up to the current row for all columns
+      NonVideo_Data.Recall[row, ] <- 
+        ifelse(is.na(NonVideo_Data.Recall[row, ]) | NonVideo_Data.Recall[row, ] == "", 
+                NonVideo_Data.Recall[row + 1, ], 
+                NonVideo_Data.Recall[row, ])
+      
+      # Mark the row below for removal
+      rows_to_remove <- c(rows_to_remove, row + 1)
+    }
+  }
+}
+
+# Remove rows that have been shifted up (ensure no duplicates)
+rows_to_remove <- unique(rows_to_remove)  # Remove duplicates if any
+rows_to_remove <- rows_to_remove[rows_to_remove <= nrow(NonVideo_Data.Recall)]  # Check bounds
+
+# Remove the rows from the data frame
+NonVideo_Data.Recall <- NonVideo_Data.Recall[-rows_to_remove, ]
+
+
+    
+  NonVideo_Data.Recall<- NonVideo_Data.Recall%>%
+        filter( NonVideo_Data.Recall$key_resp_Learn.keys != "space")
+    
+    
+# Find the index of the first non-NA value in the BlockTracker1.started column
+first_non_na_index <- which(!is.na(NonVideo_Data.Recall$ImmediateTest.started))[1]
+
+# Check if a non-NA value was found
+if (!is.na(first_non_na_index)) {
+  # Subset the DataFrame to include only rows from the first non-NA value onwards
+  NonVideo_Data.Recall <- NonVideo_Data.Recall[first_non_na_index:nrow(NonVideo_Data.Recall), ]
+} else {
+  # If no non-NA values are found, return an empty DataFrame or handle accordingly
+  NonVideo_Data.Recall <- data.frame()  # Optional: create an empty DataFrame
+}
+
+
+    # Get condition number from the fourth row and "condnum" column
+    Condition <- as.integer(unlist(data[4, "condnum"]))
+    NonVideo_Data.Recall$condnum <- rep(Condition, nrow(NonVideo_Data.Recall))
+
+# first_non_na_index <- which(!is.na(NonVideo_Data.Recall$BlockTracker1.started))[1]
+
+
+    # Identify rows to move based on Imm_Delay == 1
+    rows_to_move <- which(NonVideo_Data.Recall$Imm_Delay == 1 )
+
+    # # # Loop through each row and move the values from the row above
+  for (row_index in rows_to_move) {
+     NonVideo_Data.Recall[row_index, c('respposX2', 'respposY2', 'locresp2', 'locresp2_adj',
+                                        'Recall_Loc_Test_rt', 'Old_New_Test', 'Old_New_Test_rt',
+                                      'Remember_Test', 'Remember_Test_rt')] <-
+        NonVideo_Data.Recall[row_index - 1, c('respposX2', 'respposY2', 'locresp2',
+                                             'locresp2_adj', 'Recall_Loc_Test_rt',
+                                            'Old_New_Test', 'Old_New_Test_rt',
+                                               'Remember_Test', 'Remember_Test_rt')]
+ }
+#
+#     # # # Remove the now empty rows
+ NonVideo_Data.Recall <- NonVideo_Data.Recall[-(rows_to_move - 1), ]
+#
+
+  # Identify rows where Imm_Delay is NA
+rows_with_na <- which(is.na(NonVideo_Data.Recall$Imm_Delay))
+
+# Loop through each row with NA in Imm_Delay
+for (row_index in rows_with_na) {
+  # Find the next row with a non-NA value in Imm_Delay
+  next_non_na_row <- min(which(!is.na(NonVideo_Data.Recall$Imm_Delay[(row_index + 1):nrow(NonVideo_Data.Recall)]))) + row_index
+  
+  # Ensure the next_non_na_row is valid
+  if (!is.na(next_non_na_row) && next_non_na_row <= nrow(NonVideo_Data.Recall)) {
+    # Move data from the current NA row to the next non-NA row without overwriting existing values
+    for (col in names(NonVideo_Data.Recall)) {
+      if (is.na(NonVideo_Data.Recall[next_non_na_row, col])) {
+        NonVideo_Data.Recall[next_non_na_row, col] <- NonVideo_Data.Recall[row_index, col]
+      }
+    }
+  }
+}
+
+# Remove the now empty rows (those where Imm_Delay was NA and data has been moved)
+NonVideo_Data.Recall <- NonVideo_Data.Recall[-rows_with_na, ]
+  NonVideo_Data.RecallImmDelay<-NonVideo_Data.Recall%>%
+       filter(NonVideo_Data.Recall$Imm_Delay== 1)
+      NonVideo_Data.RecallOLDImmDelay<- NonVideo_Data.RecallImmDelay%>%
+        filter( NonVideo_Data.RecallImmDelay$OldImages==1)
+
+      
+  #filter out data so we just have what was tested in the immediate delay: note this also includes the new objects but we want to keep this in now to calc forgotten/misjudged as old etc. 
+NonVideo_Data.Recall_Delay1 <-NonVideo_Data.Recall%>%
+  
+  filter(Imm_Delay==1) #This should be 84
+
+NonVideo_Data.Recall_Delay1Remember<-NonVideo_Data.Recall_Delay1%>%
+  filter(Remember_Test!="NA")
+
+block_summary <- NonVideo_Data.Recall_Delay1 %>%
+  group_by(block) %>%  # Group by block
+  summarise(
+    CorrectRecallOld = sum(Old_New_Test == 1 & OldImages == 1, na.rm = TRUE),
+    ForgetRecallOld = sum(Old_New_Test == 2 & OldImages == 1, na.rm = TRUE),
+    CorrectRecallNew = sum(Old_New_Test == 2 & OldImages == 0, na.rm = TRUE),
+    NewRecallOld = sum(Old_New_Test == 1 & OldImages == 0, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+block_summary_overall <- NonVideo_Data.Recall_Delay1 %>%
+  summarise(
+    CorrectRecallOld = sum(Old_New_Test == 1 & OldImages == 1, na.rm = TRUE),
+    ForgetRecallOld = sum(Old_New_Test == 2 & OldImages == 1, na.rm = TRUE),
+    CorrectRecallNew = sum(Old_New_Test == 2 & OldImages == 0, na.rm = TRUE),
+    NewRecallOld = sum(Old_New_Test == 1 & OldImages == 0, na.rm = TRUE)
+  ) %>%
+  mutate(block = "Overall")  # Label for overall summary
+
+All_summary <- rbind(block_summary, block_summary_overall)
+
+All_summary$participant <- unique(NonVideo_Data.Recall_Delay1$participant)
+All_summary$ToD_Condition <- unique(NonVideo_Data.Recall_Delay1$ToD_Condition)
+All_summary$AgeGroup <- unique(NonVideo_Data.Recall_Delay1$AgeGroup)
+
+participant_id <- unique(NonVideo_Data.Recall$participant)
+
+
+Summary_Long <- All_summary %>%
+  filter(block=="Overall")%>%
+  pivot_longer(
+    cols = c(CorrectRecallOld, ForgetRecallOld, CorrectRecallNew, NewRecallOld),  # Ensure correct column names
+    names_to = "Category",
+    values_to = "Value"
+  )
+
+
+Summ_Old_New<-ggplot(Summary_Long, aes(x = Category, y = Value, fill = Category)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  
+  # Add the value of each bar on top
+  geom_text(aes(label = Value), 
+            position = position_dodge(width = 0.9), 
+            vjust = -0.5,  # Adjust position above the bars
+            size = 3) +    # Set text size +
+  labs(title = paste("Old/New Remember Responses - Participant:", participant_id),  # Include subject ID
+       x = "Type",
+       y = "Number") +
+  theme_minimal()
+
+print(Summ_Old_New)
+
+#data frame for only objects that were old and also correctly recalled as old**
+#this is really what we will be comparing the the learning to 
+NonVideo_Data.Recall_Old <-NonVideo_Data.Recall%>%
+  
+  filter(Old_New_Test==1 & OldImages==1)%>%
+  select(-NewObject,-key_resp_Learn.keys,-testNewLocStartVal)
+  #relocate(locresp1:locresp1_adj, .after = OldImages)%>%
+  #relocate(respposX1:respposY1, .before = locresp1)
+  NonVideo_Data.Recall_Old[NonVideo_Data.Recall_Old == ""] <- NA
+
+subject_ID <- unique(NonVideo_Data.Recall_Old$participant)[1]
+
+
+  # Find the row where 'Subject' matches the participant
+participantRow <- AgeGroup_ToD_Cond[AgeGroup_ToD_Cond$participant == subject_ID, ]
+
+# Check if the participant exists in the data frame
+if (nrow(participantRow) == 1) { 
+  # Retrieve SubID and other required data
+  SubID <- participantRow$SubID[1]  # Extract SubID (non-identifiable)
+  AgeGroup <- participantRow$AgeGroup[1]  # Extract the first (and only) value
+  ToD_Condition <- participantRow$Condition[1]  # Extract the first (and only) value
+  
+  # Display retrieved data
+  cat('Participant:', subject_ID, '\n')
+  cat('SubID:', SubID, '\n')  # Now using SubID instead of participant ID
+  cat('Age Group:', AgeGroup, '\n')
+  cat('Condition:', ToD_Condition, '\n')
+  
+
+
+NonVideo_Data.Recall_Old <- merge(NonVideo_Data.Recall_Old, participantRow, by = "participant", all.x = TRUE)
+Old_New_Remember<- merge(All_summary, participantRow, by = "participant")
+summary_data <- rbind(summary_data, Old_New_Remember)
+
+  
+  # Use SubID when saving files
+  if (AgeGroup == "YA") {
+    write.csv(NonVideo_Data.Recall_Old, 
+              file = file.path(Recall_dir_YA, paste0(SubID, "_Recall.csv")),
+              row.names = FALSE)
+  } else if (AgeGroup == "OA") {
+    write.csv(NonVideo_Data.Recall_Old, 
+              file = file.path(Recall_dir_OA, paste0(SubID, "_Recall.csv")),
+              row.names = FALSE)
+  }
+  
+} else {
+  cat('Participant', SubID, 'not found or found multiple entries in the data frame.\n')
+}
+
+
+
+NonVideo_Data.Recall_Old_only <-NonVideo_Data.Recall_Delay1%>%
+  select(OldImages,obj1,locresp2,locresp2_adj)%>%
+  filter(OldImages==1)
+ 
+#dataframe of forgotten old
+ NonVideo_Data.Recall_ForgottenOld <-NonVideo_Data.Recall%>%
+ 
+  filter(Old_New_Test==2 & OldImages==1)
+ #CorrectRecallOdForgotten<-count( NonVideo_Data.Recall_ForgottenOld)
+
+
+ 
+NonVideo_Data.Recall_Old_forgotten<-NonVideo_Data.Recall_Delay1 %>%
+  group_by(
+   Old_New_Test=='2' & OldImages=='1'
+  )%>%
+  tally()
+NonVideo_Data.Recall_Old_forgotten
+
+##need to get rid of new ones!
+
+
+#reaction time
+# Calculate average reaction times
+Avg_Recall_Loc_Test_rt <- mean(NonVideo_Data.Recall_Delay1$Recall_Loc_Test_rt, na.rm = TRUE)
+Avg_Old_New_Test_rt <- mean(NonVideo_Data.Recall_Delay1$Old_New_Test_rt, na.rm = TRUE)
+Avg_Remember_Test_rt <- mean(NonVideo_Data.Recall_Delay1$Remember_Test_rt, na.rm = TRUE)
+
+
+# Calculate average reaction times for "old" items
+Avg_Old_Recall_Test_rt <- mean(NonVideo_Data.Recall_Delay1$Old_New_Test_rt[NonVideo_Data.Recall_Delay1$Old_New_Test == 1], na.rm = TRUE)
+
+# Calculate average reaction times for "new" items
+Avg_New_Recall_Test_rt <- mean(NonVideo_Data.Recall_Delay1$Old_New_Test_rt[NonVideo_Data.Recall_Delay1$Old_New_Test == 2], na.rm = TRUE)
+
+# Calculate average reaction times for "obj and location" (Remember_Test == 1)
+Avg_Obj_Loc_Remember_Test_rt <- mean(NonVideo_Data.Recall_Delay1$Remember_Test_rt[NonVideo_Data.Recall_Delay1$Remember_Test == 1], na.rm = TRUE)
+
+# Calculate average reaction times for "object only" (Remember_Test == 2)
+Avg_Obj_Remember_Test_rt <- mean(NonVideo_Data.Recall_Delay1$Remember_Test_rt[NonVideo_Data.Recall_Delay1$Remember_Test == 2], na.rm = TRUE)
+
+
+
+
+Average_ReactionTimes <- rbind(Average_ReactionTimes, 
+                               data.frame(participant = subject_ID,
+                                          Avg_Recall_Loc_Test_rt = Avg_Recall_Loc_Test_rt, 
+                                          Avg_Old_New_Test_rt = Avg_Old_New_Test_rt, 
+                                          Avg_Remember_Test_rt = Avg_Remember_Test_rt,
+                                          Avg_Old_Recall_Test_rt = Avg_Old_Recall_Test_rt,
+                                          Avg_New_Recall_Test_rt = Avg_New_Recall_Test_rt,
+                                          Avg_Obj_Loc_Remember_Test_rt = Avg_Obj_Loc_Remember_Test_rt,
+                                          Avg_Obj_Remember_Test_rt = Avg_Obj_Remember_Test_rt))
+
+  #Average_ReactionTimes<-rbind( Average_ReactionTimes, Average_ReactionTimes_sub)
+
+#summary_data <- rbind(summary_data, Summary_Old_New_Remember)
+
+}
+
+
+# View the new dataframe
+#print(Average_ReactionTimes)
+
+
+
+
+
+
+##This is the dataframe that has by block correctly identified as old, correctly identified as new, forgotten old, new recalled as old
+write.csv(summary_data,
+          file.path(Clean_Data_Dir, "Summary_Data_NonVideo.csv"),
+          row.names = FALSE)
+
+
+ 
+ #reaction times
+ # Load necessary library
+library(dplyr)
+ 
+ # Merge with the AllParticipants_Learning_Avg dataframe to include Avg_Learning_Loc_Test_rt
+Combined_ReactionTimes <- merge(Average_ReactionTimes, AllParticipants_Learning_Avg, 
+                                by = c("participant"), 
+                                all.y = TRUE)
+
+
+# Save the merged dataframe to a CSV file
+write.csv(
+  Combined_ReactionTimes,
+  file.path(Clean_Data_Dir, "Combined_Average_ReactionTimes.csv"),
+  row.names = FALSE
+)
+
+
+
+```
+
+```{r identify reaction time outliers }, echo=FALSE}
+
+# Load necessary library
+library(dplyr)
+
+# Function to flag outliers (3 SD above or below the mean) for each variable
+flag_outliers <- function(df, variable) {
+  df %>%
+    group_by(AgeGroup) %>%
+    mutate(!!paste0(variable, "_outlier") := ifelse(
+      (!!sym(variable) > mean(!!sym(variable), na.rm = TRUE) + 3 * sd(!!sym(variable), na.rm = TRUE)) | 
+      (!!sym(variable) < mean(!!sym(variable), na.rm = TRUE) - 3 * sd(!!sym(variable), na.rm = TRUE)), TRUE, FALSE)) %>%
+    ungroup()
+}
+
+# List of reaction time variables to check
+rt_vars <- c("Avg_Recall_Loc_Test_rt", "Avg_Learning_Loc_Test_rt",
+            "Avg_Old_New_Test_rt", "Avg_Old_Recall_Test_rt", "Avg_New_Recall_Test_rt", "Avg_Remember_Test_rt",
+             "Avg_Obj_Loc_Remember_Test_rt", "Avg_Obj_Remember_Test_rt")
+
+# Apply the outlier function for each variable
+Combined_ReactionTimes_outliers <- Combined_ReactionTimes
+for (var in rt_vars) {
+  Combined_ReactionTimes_outliers <- flag_outliers(Combined_ReactionTimes_outliers, var)
+}
+
+  Combined_ReactionTimes_outliers<-  Combined_ReactionTimes_outliers%>%
+    relocate(Avg_Recall_Loc_Test_rt_outlier, .after = Avg_Recall_Loc_Test_rt) %>%
+    relocate(Avg_Old_New_Test_rt_outlier, .after = Avg_Old_New_Test_rt) %>%
+    relocate(Avg_Learning_Loc_Test_rt_outlier, .after = Avg_Learning_Loc_Test_rt) %>%
+    relocate(Avg_Remember_Test_rt_outlier, .after = Avg_Remember_Test_rt) %>%
+   relocate(Avg_Old_Recall_Test_rt_outlier, .after =Avg_Old_Recall_Test_rt) %>%
+   relocate(Avg_New_Recall_Test_rt_outlier, .after = Avg_New_Recall_Test_rt) %>%
+   relocate(Avg_Obj_Loc_Remember_Test_rt_outlier, .after = Avg_Obj_Loc_Remember_Test_rt) %>%
+   relocate( Avg_Obj_Remember_Test_rt_outlier, .after = Avg_Obj_Remember_Test_rt) 
+
+
+
+# Filter to keep only rows where any of the outlier columns is TRUE
+# Create a condition to check if any outlier flag is TRUE
+outlier_cols <- paste0(rt_vars, "_outlier")
+outliers_only <- Combined_ReactionTimes_outliers %>%
+  filter(if_any(all_of(outlier_cols), ~ . == TRUE))%>%
+  
+
+# View the resulting dataframe with only outliers
+print(outliers_only)
+
+#relocate(locresp1:locresp1_adj, .after = testObj1Target) %>%
+
+
+# Save the merged dataframe to a CSV file
+write.csv(
+  Combined_ReactionTimes_outliers,
+  file.path(Clean_Data_Dir, "Combined_Average_ReactionTimes_Outliers.csv"),
+  row.names = FALSE
+)
+# Save the merged dataframe to a CSV file
+write.csv(
+  outliers_only,
+  file.path(Clean_Data_Dir, "Reaction_Times_outliers_only.csv"),
+  row.names = FALSE
+)
+
+```
+
+
+```{r bind imm_delay  and learning together  for YA and OA }, echo=FALSE}
+
+
+# Get YA + OA learning files
+learning_files <- c(
+  list.files(Learning_dir_YA, pattern="\\.csv$", full.names=TRUE),
+  list.files(Learning_dir_OA, pattern="\\.csv$", full.names=TRUE)
+)
+
+# Get YA + OA recall files
+recall_files <- c(
+  list.files(Recall_dir_YA, pattern="\\.csv$", full.names=TRUE),
+  list.files(Recall_dir_OA, pattern="\\.csv$", full.names=TRUE)
+)
+
+for (i in seq_along(learning_files)) {
+
+  Learning <- read.csv(learning_files[i])
+  Recall   <- read.csv(recall_files[i])
+
+
+  # Select needed columns explicitly
+
+  Learning <- Learning %>%
+    select(obj1, locresp1, locresp1_adj, respposX1, respposY1, Learning_Loc_Test_rt)
+
+  Recall <- Recall %>%
+    select(
+      participant, SubID, AgeGroup, ToD_Condition,
+      obj1, respposX2, respposY2, locresp2, locresp2_adj,
+      Old_New_Test, Old_New_Test_rt,
+      Remember_Test, Remember_Test_rt,
+      Recall_Loc_Test_rt, Imm_Delay
+    )
+
+
+  # Merge Learning + Recall
+
+  Learning_Recall <- merge(Learning, Recall, by="obj1", all.y=TRUE)
+
+ 
+  # Identify participant + SubID
+ 
+  subject_ID <- unique(Recall$participant)[1]
+  SubID      <- unique(Recall$SubID)[1]
+  AgeGroup   <- unique(Recall$AgeGroup)[1]
+
+  cat("Participant:", subject_ID, "\n")
+  cat("SubID:", SubID, "\n")
+  cat("AgeGroup:", AgeGroup, "\n")
+
+  
+  # Save to correct folder
+
+  if (AgeGroup == "YA") {
+    write.csv(
+      Learning_Recall,
+      file = file.path(Learn_Recall_YA, paste0(SubID, "_Learning_Recall.csv")),
+      row.names = FALSE
+    )
+  } else {
+    write.csv(
+      Learning_Recall,
+      file = file.path(Learn_Recall_OA, paste0(SubID, "_Learning_Recall.csv")),
+      row.names = FALSE
+    )
+  }
+
+  # Save general version
+  write.csv(
+    Learning_Recall,
+    file = file.path(Clean_Data_Dir, "Learning_Recall", paste0(SubID, "_Learning_Recall.csv")),
+    row.names = FALSE
+  )
+}
+
+ 
+```
+
+
+
+
+
+  
+

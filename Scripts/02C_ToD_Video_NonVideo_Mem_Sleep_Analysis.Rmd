@@ -1,0 +1,325 @@
+---
+title: "ToDFullOnlineHybridComparison"
+author: "Julia Maybury"
+date: "2024-11-22"
+output: html_document
+---
+
+```{r important libraries, include=FALSE}
+# Clear workspace
+rm(list = ls())
+
+# Set knitr defaults
+knitr::opts_chunk$set(echo = TRUE)
+
+# Load required packages
+library(tidyverse)
+library(broom)      
+library(ggpubr)     
+library(readxl)
+library(reshape2)
+library(lattice)
+library(data.table)
+library(car)          # Type II/III ANOVA
+library(BayesFactor)
+library(RColorBrewer)
+```
+
+```{r update directories based on where folders are located, echo=FALSE}
+
+#directory configuration change base_path with directory location for folders
+
+base_path<-"C:/Users/julia/OneDrive/Desktop"
+
+#cleaned data directories
+ToD_VideoData_Dir <- file.path(base_path, "Cleaned_ToD_VideoData") #directory for video data 
+ToD_NonVideoData_Dir <- file.path(base_path, "Cleaned_ToD_NonVideoData") #directory for non-video data 
+
+#demo sleep directory
+Demo_Sleep_Dir_Video<- file.path(ToD_VideoData_Dir, "Demo_Sleep") #video demo dir
+Demo_Sleep_Dir_NonVideo<- file.path(ToD_NonVideoData_Dir, "Demo_Sleep") #non-video demo dir
+
+#combined video and non-video output directory 
+ToD_Video_NonVideo_Dir<- file.path(base_path, "ToD_Video_NonVideo_Data")
+
+#Figure Directory 
+Figure_Directory<- file.path(ToD_Video_NonVideo_Dir, "Figures")
+
+
+```
+
+
+```{r Combine Video and Non-Video memory, demo and sleep data, echo=FALSE}
+
+# Non-video memory data
+ToD_NonVideo <- read.csv(file.path(ToD_NonVideoData_Dir, "MemoryABS_Rec_NonVideo.csv")) %>%
+  mutate(ExpFormat = "Non_Video",
+         collected_by = "Julia") %>%
+  select(-Date)
+
+# Video memory data
+ToD_Video <- read.csv(file.path(ToD_VideoData_Dir, "MemoryABS_Rec_Video.csv")) %>%
+  rename(SubID = participant) %>%
+  mutate(ExpFormat = "Video")
+
+# Combine memory datasets
+MemDataOnlineVideo <- bind_rows(ToD_NonVideo, ToD_Video)
+
+# Save combined memory dataset 
+write.csv(MemDataOnlineVideo,
+          file.path(ToD_Video_NonVideo_Dir, "MemoryABS_Rec_Video_NonVideo.csv"),
+          row.names = FALSE)
+
+# Load in Non-video sleep and demographics data 
+MEQ_PSQI_NonVideo <- read.csv(file.path(Demo_Sleep_Dir_NonVideo,
+                                        "PSQI_MEQ_Cond_Ages_All_NonVideo.csv")) %>%
+  select(-Date, -Distractor, -Distractor_MEQ) %>%
+  filter(SubID != "Sub067_ToD_Online") %>%   # Remove excluded participant
+  mutate(collected_by = "Julia",
+         ExpFormat = "Non_Video")
+
+# load in Video sleep and demographics data 
+MEQ_PSQI_Video <- read.csv(file.path(Demo_Sleep_Dir_Video,
+                                     "PSQI_MEQ_Cond_Ages_All_Video.csv")) %>%
+  rename(SubID = participant) %>%
+  mutate(ExpFormat = "Video")
+
+# Combine sleep demographics from two experiment formats
+MEQ_PSQI_Video_NonVideo <- bind_rows(MEQ_PSQI_NonVideo, MEQ_PSQI_Video)
+
+# Remove duplicated columns before merge
+MEQ_PSQI_Video_NonVideo_Merge <- MEQ_PSQI_Video_NonVideo %>%
+  select(-AgeGroup, -ToD_Condition, -collected_by, -ExpFormat)
+
+# Merge sleep and demo data with memory data
+Memory_Sleep_Demo_Vid_NonVid <- merge(MEQ_PSQI_Video_NonVideo_Merge,
+                                      MemDataOnlineVideo,
+                                      by = "SubID") %>%
+  relocate(ExpFormat, .before = psqi_1) %>%
+  relocate(AgeGroup:ToD_Condition, .after = SubID) %>%
+  relocate(age:education_years, .after = SubID)
+
+# Save final memory, sleep and demo data combined both experiment formats
+write.csv(Memory_Sleep_Demo_Vid_NonVid,
+          file.path(ToD_Video_NonVideo_Dir, "Memory_Sleep_Demo_Vid_NonVid_FinalData.csv"),
+          row.names = FALSE)
+
+
+```
+
+
+```{r Recognition Memory Analysis andPlot , include=FALSE}
+
+#### code for Recognition Memory Analysis and Plot#### ###
+
+#recode factors
+Memory_Sleep_Demo_Vid_NonVid <- Memory_Sleep_Demo_Vid_NonVid %>%
+  mutate(
+    ExpFormat = dplyr::recode(ExpFormat,
+                              "Non_Video" = "Non-Video",
+                              "Video"     = "Video"),
+    ToD_Condition = dplyr::recode(ToD_Condition,
+                                  "Night" = "Evening"),
+    AgeGroup = dplyr::recode(AgeGroup,
+                             "YA" = "Young",
+                             "OA" = "Old"),
+    AgeGroup = factor(AgeGroup),
+    ToD_Condition = factor(ToD_Condition),
+    ExpFormat = factor(ExpFormat)
+  )
+
+
+#three way ANOVA age group, time of day, exp format on recognition memory : bays Factors calc using JASP
+
+options(contrasts = c("contr.sum", "contr.poly"))
+RecognitionScoreModel <- lm(
+  RecognitionScore ~ AgeGroup * ToD_Condition * ExpFormat,
+  data = Memory_Sleep_Demo_Vid_NonVid
+)
+Anova(RecognitionScoreModel, type = 3)
+
+
+#set colors for plotting
+selected_colorsRec <- c(
+  "Evening"=brewer.pal(11, "RdBu")[9],    #blue
+  "Morning"=brewer.pal(11, "PuOr")[3]   # orange
+)
+
+
+theme_set(
+  theme_bw() +
+    theme(text = element_text(family = "Arial"))
+)
+
+
+RecScore_Age_Format_ToD<-ggplot(Memory_Sleep_Demo_Vid_NonVid,
+       aes(x = AgeGroup, y = RecognitionScore, fill = ToD_Condition)) +
+  stat_summary(fun = mean,
+               geom = "bar",
+               position = position_dodge(0.9)) +
+  stat_summary(fun.data = mean_se,
+               geom = "errorbar",
+               position = position_dodge(0.9),
+               width = 0.2) +
+  facet_wrap(~ExpFormat) +
+  ylim(0, 1) +
+  labs(
+    y = "Recognition Score",
+    x = "Age Group",
+    fill = "Time of Day"
+  ) +
+  scale_fill_manual(values = selected_colorsRec) +
+  theme_classic()+
+theme(
+  aspect.ratio = 1
+)+
+  theme(
+    legend.text = element_text(size = 12,face="bold"),
+    legend.title = element_text(size = 13, face = "bold"),
+    axis.text = element_text(size = 12,face="bold"),
+    axis.title = element_text(size = 14, face = "bold"),
+    plot.title = element_text(size = 16, face = "bold"),
+    strip.text = element_text(size = 14, face = "bold")
+  )
+
+#save recognition plot
+
+RecScore_Age_Format_ToD
+# save plots with high resolution
+ggsave(
+  filename =file.path(Figure_Directory,"RecScore.jpeg"),
+  plot = RecScore_Age_Format_ToD, width = 5.2, height = 3)
+
+
+# Save plot to strict PLOS ONE specifications
+ggsave(
+filename =file.path(Figure_Directory,"RecScore.tif"),
+  plot = RecScore_Age_Format_ToD, 
+  device = "tiff",        
+  width = 5.2,           
+  height = 3,          
+  units = "in",           
+  dpi = 300,              
+  compression = "lzw"     
+)
+
+
+
+```
+
+
+
+```{r MEQ Analysis, Plot and Scoring Explanation, include=FALSE}
+
+
+#calculate MEQ summary Stats by age and time of day
+MEQ_Summary <- Memory_Sleep_Demo_Vid_NonVid %>%
+  group_by(AgeGroup, ToD_Condition) %>%
+  summarise(
+    mean_MEQ = mean(MEQScore, na.rm = TRUE),
+    se_MEQ = sd(MEQScore, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  )
+
+age_MEQ_summary <- Memory_Sleep_Demo_Vid_NonVid %>%
+  group_by(AgeGroup) %>%
+  summarise(
+    mean_MEQ = mean(MEQScore, na.rm = TRUE),
+    se_MEQ = sd(MEQScore, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  )
+
+#anova for MEQ, Bayes Factors calc using JASP
+options(contrasts = c("contr.sum", "contr.poly"))
+anova_result_MEQ <- lm(
+  MEQScore ~ AgeGroup * ToD_Condition,
+  data = Memory_Sleep_Demo_Vid_NonVid
+)
+Anova(anova_result_MEQ, type = 3)
+
+
+#colors for plotting MEQ
+selected_colors_MEQ <- brewer.pal(5, "Set1")[c(4, 2)] 
+
+MEQLine<-ggplot(MEQ_Summary, aes(x = ToD_Condition, y = mean_MEQ, 
+                       group = AgeGroup, color = AgeGroup)) +
+  
+  geom_line(linewidth = 1) +
+  geom_point(size = 3) +
+  
+  geom_errorbar(aes(ymin = mean_MEQ - se_MEQ, 
+                    ymax = mean_MEQ + se_MEQ), 
+                width = 0.1) +
+
+  scale_color_manual(values = selected_colors_MEQ) +
+  scale_y_continuous(limits = c(45, 65), breaks = seq(45, 65, 5))+
+
+  
+  labs(
+    x = "Time of Day",
+    y = "Mean MEQ Score",
+    colour = "Age Group"#,
+    #title = "Mean MEQ Scores by Age Group and Time of Day"
+  ) +
+  
+ theme_minimal(base_size = 14) +
+theme(
+  panel.grid = element_blank(),   # removes grid lines ✅
+  axis.line = element_line(colour = "black"),  # adds axis lines
+  plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+  axis.title = element_text(size = 16, face = "bold"),
+  axis.text = element_text(size = 13),
+  legend.title = element_text(size = 14, face = "bold"),
+  legend.text = element_text(size = 13)
+)
+
+#save MEQ plot
+ggsave(
+  filename =file.path(Figure_Directory,"MEQLine.jpg"), plot = MEQLine, bg = "transparent", width = 5, height = 3, dpi = 600)
+
+
+# Save plot to strict PLOS ONE specifications
+ggsave(
+  filename = file.path(Figure_Directory,"MEQLine.tif"),
+  plot = MEQLine, 
+  device = "tiff",        
+  width = 5,            
+  height = 3,          
+  units = "in",          
+  dpi = 400,             
+  compression = "lzw"     
+)
+
+##Note code commented below was run in pre processing script that using raw data but shows how Chronotype  was calculated based on MEQ score , as well as the median split and weather or not participants  were in their march condition: tested at their preferred  time meaning their Chronotype aligned with time of testing  ###
+##score ranging from 16 to 86; scores of 41 and below indicate "evening types", scores of 59 and above indicate "morning types", scores between 42-58 indicate "intermediate types".
+# 
+# PSQI_MEQ_Cond_Age<- PSQI_MEQ_Cond_Age %>%
+#   mutate(Chronotype = case_when(
+#    MEQScore <= 41 ~ "Evening Type",
+#     MEQScore >= 59 ~ "Morning Type",
+#     MEQScore>= 42 &MEQScore <= 58 ~ "Intermediate Type"
+#   ))%>%
+#    mutate(MEQScore = as.numeric(MEQScore))%>%
+#   mutate(
+#     MedianSplit_MEQ = case_when(
+#       MEQScore <= median(MEQScore, na.rm = TRUE) ~ "Night",
+#       MEQScore > median(MEQScore, na.rm = TRUE) ~ "Morning"
+#     )
+#   )%>%
+#   mutate(
+#     MatchCondition = if_else(MedianSplit_MEQ == ToD_Condition, "Yes", "No")
+#   )
+
+
+
+#count number in preferred and non-preffered time 
+Memory_Sleep_Demo_Vid_NonVid %>%
+  count(MatchCondition, AgeGroup)
+
+
+
+```
+
+
+
+

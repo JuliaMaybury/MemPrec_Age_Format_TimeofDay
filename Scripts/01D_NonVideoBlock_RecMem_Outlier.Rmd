@@ -1,0 +1,887 @@
+---
+title: "ToD_NonVideo_Block_Memory_Analysis""
+author: "Julia Maybury"
+date: "2025-02-17"
+output: html_document
+---
+
+```{r important libraries, include=FALSE}
+# Clear console
+rm(list=ls())
+
+# Default setting. 
+knitr::opts_chunk$set(echo = TRUE)
+
+
+# Call necessary packages
+
+library(tidyverse)
+library(data.table)
+library(readxl)
+library(reshape2)
+library(lattice)
+
+
+library(ggpubr)
+library(broom)
+
+
+```
+
+
+```{r update directories based on where folders are located, echo=FALSE}
+
+# change "/path/to" to where your path is located for the the data folder Cleaned_ToD_VideoData which should contain folder Learning_Recall with all of the cleaned data 
+
+
+#Cleaned NonVideo Data Directory, change path/to/ based on where cleaned non-video data folder is located
+Clean_Data_Dir <- "C:/Users/julia/OneDrive/Desktop/Cleaned_ToD_NonVideoData"
+
+#my path/to
+#"C:/Users/julia/OneDrive/Desktop/
+
+AbsErr_Data_Dir <- file.path(Clean_Data_Dir, "AbsErr_Data_NonVideo" )
+
+
+# Age group + condition file
+ageGroup_file     <- file.path(Clean_Data_Dir, "AgeGroup_Con_NonVideo.csv")
+
+```
+
+
+
+```{r calculate absolute error(abs) for learning phase overall and across 3 blocks: Nonvideo Study , echo=FALSE}
+
+#This code calculates the absolute learning error for each trial of each block for each participant
+#Code then identifies if any subject is an outlier on absolute error for learning trials by age group, first for each block (1,2,3) and then Overall (1,2,3 blocks averaged together)
+
+newlist_of_files <- list.files(
+    path = file.path(Clean_Data_Dir, "Learning_Recall"), #inside the cleaned non-data folder contains the learning and recall data folder with the cleaned data
+    pattern = "\\.csv$",
+    full.names = TRUE
+)
+
+
+# Create an empty dataframe to store results
+results_learning_overall <- data.frame(sub_id = character(),
+                         block = integer(),
+                         absavg = numeric(),
+                         minavg = numeric(),
+                         stringsAsFactors = FALSE)
+
+# Loop through each file
+for (file in newlist_of_files) {
+  #skip subject who was 58 
+     if (grepl("Sub067_ToD_Online_Learning", file)) next
+    # Read the data from the CSV file
+    data <- read.csv(file, stringsAsFactors = FALSE)
+    
+    # Initialize empty vectors to store errors
+    err1 <- numeric(nrow(data))
+    err2 <- numeric(nrow(data))
+    err <- numeric(nrow(data))
+    
+    # Loop through rows of data
+    for (i in 1:nrow(data)) {
+        err1[i] <- abs(max(data[i, "locresp1_adj"], data[i, "testObj1LocTargetVal"]) - min(data[i, "locresp1_adj"], data[i, "testObj1LocTargetVal"]))
+        err2[i] <- abs(360 - max(data[i, "locresp1_adj"], data[i, "testObj1LocTargetVal"]) + min(data[i, "locresp1_adj"], data[i, "testObj1LocTargetVal"]))
+        
+        if (err1[i] > err2[i]) { 
+            err[i] <- 2
+            data[i, "abs_err"] <- err2[i] 
+            data[i, "prec_err"] <- 180 - err2[i] 
+        } else {
+            err[i] <- 1 
+            data[i, "abs_err"] <- err1[i]  
+            data[i, "prec_err"] <- 180 - err1[i]
+        }
+
+        # Calculate min error (+/-)
+        if (err[i] == 1) { 
+            data[i, "min_err"] <- (data[i, "locresp1_adj"] - data[i, "testObj1LocTargetVal"])
+        } else {
+            if (data[i, "locresp1_adj"] < 180) { 
+                data[i, "min_err"] <- 360 - (data[i, "testObj1LocTargetVal"]) + (data[i, "locresp1_adj"])
+            } else {
+                data[i, "min_err"] <- -(360 - (data[i, "locresp1_adj"]) + (data[i, "testObj1LocTargetVal"]))
+            }
+        }
+    }
+    
+    # Extract participant ID from filename
+    sub_id <- gsub("_Learning.*", "", basename(file))
+
+    # Compute overall averages
+    absavg_total <- mean(data$abs_err, na.rm = TRUE)
+    minavg_total <- mean(data$min_err, na.rm = TRUE)
+    
+    # Append overall results
+results_learning_overall <- rbind(results_learning_overall, data.frame(sub_id = sub_id, block = "Overall", absavg = absavg_total, minavg = minavg_total))
+
+    # Compute block-wise averages
+    block_averages <- aggregate(cbind(abs_err, min_err) ~ block, data = data, FUN = mean, na.rm = TRUE)
+
+    # Append block results
+    for (j in 1:nrow(block_averages)) {
+   results_learning_overall <- rbind(results_learning_overall, data.frame(sub_id = sub_id, 
+                                                   block = block_averages$block[j], 
+                                                   absavg = block_averages$abs_err[j], 
+                                                   minavg = block_averages$min_err[j]))
+    }
+}
+
+# View results
+print(results_learning_overall)
+
+# Function to flag outliers (values > 3 SD from the mean)
+flag_outliers <- function(data) {
+    mean_val <- mean(data$absavg, na.rm = TRUE)
+    sd_val <- sd(data$absavg, na.rm = TRUE)
+    data$outlier_Learning_Age <- ifelse((data$absavg> mean_val + 3 * sd_val) | 
+                           (data$absavg < mean_val - 3 * sd_val), TRUE, FALSE)
+    return(data)
+}
+
+
+AgeGroup_ToD_Cond <- read.csv(ageGroup_file)
+
+
+AgeGroup_ToD_Cond<-AgeGroup_ToD_Cond%>%
+  rename(
+  sub_id=SubID
+)
+    
+
+results_learning_overall<-merge(AgeGroup_ToD_Cond, results_learning_overall,by="sub_id")
+
+# Identify outliers **for each block within YA and OA**
+block_outliers_learning <- results_learning_overall %>%
+    filter(block != "Overall") %>%
+    group_by(AgeGroup, block) %>%
+    group_modify(~ flag_outliers(.))
+
+# Identify outliers **for overall absavg within YA and OA**
+overall_outliers_learning <- results_learning_overall %>%
+    filter(block == "Overall") %>%
+    group_by(AgeGroup) %>%
+    group_modify(~ flag_outliers(.))
+
+# Combine block and overall outliers
+final_outliers_df_learning <- bind_rows(block_outliers_learning, overall_outliers_learning)
+
+# Filter only outliers
+outliers_only_learning <- final_outliers_df_learning %>% filter(outlier_Learning_Age == TRUE) %>% select(-outlier_Learning_Age)
+
+# View dataframe with only outliers
+print(outliers_only_learning)
+
+
+results_learning_overall <- results_learning_overall %>%
+    left_join(final_outliers_df_learning %>% select(sub_id, block, outlier_Learning_Age), 
+              by = c("sub_id", "block")) %>%
+    select(-AgeGroup.y) %>% # Remove duplicate AgeGroup column
+    rename(AgeGroup = AgeGroup.x) # Rename to keep consistency
+
+
+ results_learning_overall<- results_learning_overall%>%
+   #filter(sub_id!="Sub002_ToD")%>%
+  rename(absavg_learning=absavg,
+         minavg_learning=minavg)
+
+
+write.csv(results_learning_overall,
+          file = file.path(AbsErr_Data_Dir, "AbsAvgChangeOverBlockLearning.csv"),
+          row.names = FALSE)
+
+
+# Filter data for Overall block
+overall_data_learning <- results_learning_overall %>%
+  filter(block == "Overall")
+
+
+# Create bar chart
+ggplot( overall_data_learning , aes(x = ToD_Condition, y = absavg_learning)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(title = "Overall Mean Absolute error by ToD",
+       x = "ToD Group",
+       y = "Mean Absolute Error") +
+  theme_minimal()
+
+         
+
+# Calculate group averages by both ToD_Condition and Age_Category
+group_averages_overall_Age_ToD_learning <- aggregate(absavg_learning ~ ToD_Condition + AgeGroup, data = overall_data_learning , FUN = mean)
+
+# Create a custom color palette
+my_colors <- c("#FF5733", "#3498DB", "#F1C40F", "#2ECC71")
+
+# Create bar chart with customizations
+ggplot(group_averages_overall_Age_ToD_learning, aes(x = ToD_Condition, y = absavg_learning, fill = AgeGroup)) +
+  geom_bar(stat = "identity", position = "dodge", color = "black", width = 0.7) +
+  labs(title = "Learning: Group Averages by ToD Condition and Age Category",
+       x = "ToD Group",
+       y = "Mean Absolute Error",
+       fill = "Age Group") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust = 1)) +  # Rotate x-axis labels
+  scale_fill_manual(values = my_colors) +  # Use custom color palette
+  geom_text(aes(label = paste("Mean:", round(absavg_learning, 2)), y = absavg_learning + 0.05), position = position_dodge(width = 0.7), vjust = -0.5, size = 3) +  # Add mean values as text labels above the bars
+  theme(plot.title = element_text(hjust = 0.5))  # Center the title
+# Perform two-way ANOVA
+anova_results_learning <- aov(absavg_learning ~ ToD_Condition * AgeGroup, data = overall_data_learning)
+
+# Print ANOVA table
+summary(anova_results_learning)
+
+
+library(ggplot2)
+library(dplyr)
+
+# Filter data for Block 1, Block 2, and Block 3
+block_data_learning <- results_learning_overall %>%
+  filter(block %in% c("1", "2", "3"))
+
+# Calculate group averages by ToD_Condition, AgeGroup, and block
+group_averages_block_Age_ToD_learning <- aggregate(absavg_learning ~ ToD_Condition + AgeGroup + block, data = block_data_learning, FUN = mean)
+
+# Create a custom color palette for AgeGroup and ToD_Condition
+my_colors <- c("YA" = "#FF5733", "OA" = "#3498DB")
+
+# Create bar chart with customizations, separate bars for each block
+ggplot(group_averages_block_Age_ToD_learning, aes(x = block, y = absavg_learning, fill = interaction(ToD_Condition, AgeGroup))) + 
+  geom_bar(stat = "identity", position = "dodge", color = "black", width = 0.7) + 
+  labs(title = "Learning: Mean Absolute Error by Block, ToD Condition, and Age Group", 
+       x = "Block", 
+       y = "Mean Absolute Error", 
+       fill = "ToD Condition & Age Group") + 
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust = 1)) +  # Rotate x-axis labels
+  scale_fill_manual(values = c("Morning.YA" = "#FF5733", "Night.YA" = "#F1C40F", 
+                               "Morning.OA" = "#3498DB", "Night.OA" = "#2ECC71")) +  # Custom colors
+  geom_text(aes(label = round(absavg_learning, 2), y = absavg_learning + 0.05), 
+            position = position_dodge(width = 0.7), vjust = -0.5, size = 3) +  # Add mean values as text labels above the bars
+  theme(plot.title = element_text(hjust = 0.5))  # Center the title
+
+install.packages("afex")
+library(afex)
+
+
+```
+
+
+```{r  reformat learning abs for WIDE repeated measuress , echo=FALSE}
+
+# Remove 'Overall' row since it's not part of the repeated measures
+#learning_data_block <- results_df_overall %>% filter(block != "Overall")
+
+# Check structure
+#head(learning_data_block)
+#THIS INCLUDES EVEYRONE INCLUDING OUTLIERS except sub 002
+
+learning_data_block <- results_learning_overall%>%
+    select(sub_id, block, absavg_learning, minavg_learning) %>%  # Keep only relevant columns
+    pivot_wider(names_from = block, values_from = c(absavg_learning, minavg_learning), names_prefix = "block") %>%
+    distinct(sub_id, .keep_all = TRUE)  # Ensure one row per participant
+
+# View results
+print(learning_data_block)
+
+
+
+learning_data_block<-merge(AgeGroup_ToD_Cond, learning_data_block,by="sub_id")
+
+write.csv(learning_data_block,
+          file = file.path(AbsErr_Data_Dir, "AbsAvgBlockLearning_WIDE.csv"),
+          row.names = FALSE)
+
+
+
+```
+
+```{r  calcualte absolute error for recall phase overall and across 3 blocks, echo=FALSE}
+
+
+Recall_files <- list.files(
+    path = file.path(Clean_Data_Dir, "Learning_Recall"),
+    pattern = "\\.csv$",
+    full.names = TRUE
+)
+
+# Create an empty dataframe to store results
+results_overall_Recall <- data.frame(sub_id = character(),
+                         block = integer(),
+                         absavg = numeric(),
+                         minavg = numeric(),
+                         stringsAsFactors = FALSE)
+
+# Loop through each file
+for (file in Recall_files)  {
+  
+   if (grepl("Sub067_ToD_Online_Learning_Recal", file)) next
+    # Read the data from the CSV file
+    data <- read.csv(file, stringsAsFactors = FALSE)
+    
+    # Initialize empty vectors to store errors
+    err1 <- numeric(nrow(data))
+    err2 <- numeric(nrow(data))
+    err <- numeric(nrow(data))
+    
+    # Loop through rows of data
+    for (i in 1:nrow(data)) {
+        err1[i] <- abs(max(data[i, "locresp2_adj"], data[i, "testObj1LocTargetVal"]) - min(data[i, "locresp2_adj"], data[i, "testObj1LocTargetVal"]))
+        err2[i] <- abs(360 - max(data[i, "locresp2_adj"], data[i, "testObj1LocTargetVal"]) + min(data[i, "locresp2_adj"], data[i, "testObj1LocTargetVal"]))
+        
+        if (err1[i] > err2[i]) { 
+            err[i] <- 2
+            data[i, "abs_err"] <- err2[i] 
+            data[i, "prec_err"] <- 180 - err2[i] 
+        } else {
+            err[i] <- 1 
+            data[i, "abs_err"] <- err1[i]  
+            data[i, "prec_err"] <- 180 - err1[i]
+        }
+
+        # Calculate min error (+/-)
+        if (err[i] == 1) { 
+            data[i, "min_err"] <- (data[i, "locresp2_adj"] - data[i, "testObj1LocTargetVal"])
+        } else {
+            if (data[i, "locresp2_adj"] < 181) { 
+                data[i, "min_err"] <- 360 - (data[i, "testObj1LocTargetVal"]) + (data[i, "locresp2_adj"])
+            } else {
+                data[i, "min_err"] <- -(360 - (data[i, "locresp2_adj"]) + (data[i, "testObj1LocTargetVal"]))
+            }
+        }
+    }
+    
+    # Extract participant ID from filename
+    sub_id <- gsub("_Learning.*", "", basename(file))
+
+    # Compute overall averages
+    absavg_total <- mean(data$abs_err, na.rm = TRUE)
+    minavg_total <- mean(data$min_err, na.rm = TRUE)
+    
+    # Append overall results
+results_overall_Recall  <- rbind(results_overall_Recall , data.frame(sub_id = sub_id, block = "Overall", absavg = absavg_total, minavg = minavg_total))
+
+    # Compute block-wise averages
+    block_averages <- aggregate(cbind(abs_err, min_err) ~ block, data = data, FUN = mean, na.rm = TRUE)
+
+    # Append block results
+    for (j in 1:nrow(block_averages)) {
+   results_overall_Recall  <- rbind(results_overall_Recall , data.frame(sub_id = sub_id, 
+                                                   block = block_averages$block[j], 
+                                                   absavg = block_averages$abs_err[j], 
+                                                   minavg = block_averages$min_err[j]))
+    }
+}
+
+# View results
+print(results_overall_Recall)
+
+
+    
+AgeGroup_ToD_Cond <- read.csv(ageGroup_file)
+
+
+AgeGroup_ToD_Cond<-AgeGroup_ToD_Cond%>%
+  rename(
+  sub_id=SubID
+)
+    
+
+results_overall_Recall <-merge(AgeGroup_ToD_Cond, results_overall_Recall,by="sub_id")
+
+# Function to flag outliers (values > 3 SD from the mean)
+flag_outliers <- function(data) {
+    mean_val <- mean(data$absavg, na.rm = TRUE)
+    sd_val <- sd(data$absavg, na.rm = TRUE)
+    data$outlier_Recall_Age <- ifelse((data$absavg > mean_val + 3 * sd_val) | 
+                           (data$absavg < mean_val - 3 * sd_val), TRUE, FALSE)
+    return(data)
+}
+
+# Identify outliers **for each block within YA and OA**
+block_outliers_recall <- results_overall_Recall %>%
+    filter(block != "Overall") %>%
+    group_by(AgeGroup, block) %>%
+    group_modify(~ flag_outliers(.))
+
+# Identify outliers **for overall absavg within YA and OA**
+overall_outliers_recall <- results_overall_Recall %>%
+    filter(block == "Overall") %>%
+    group_by(AgeGroup) %>%
+    group_modify(~ flag_outliers(.))
+
+# Combine block and overall outliers
+final_outliers_df_recall<- bind_rows(block_outliers_recall, overall_outliers_recall)
+
+# Filter only outliers
+outliers_only_recall<- final_outliers_df_recall%>% filter(outlier_Recall_Age == TRUE) %>% select(-outlier_Recall_Age)
+
+# View dataframe with only outliers
+print(outliers_only_recall)
+
+
+results_overall_Recall <- results_overall_Recall %>%
+    left_join(final_outliers_df_recall %>% select(sub_id, block, outlier_Recall_Age), 
+              by = c("sub_id", "block")) %>%
+    select(-AgeGroup.y) %>% # Remove duplicate AgeGroup column
+    rename(AgeGroup = AgeGroup.x)%>% # Rename to keep consistency
+ rename(absavg_recall=absavg,
+         minavg_recall=minavg)
+
+  
+write.csv(results_overall_Recall,
+          file = file.path(AbsErr_Data_Dir, "AbsAvgChangeOverBlockRecall.csv"),
+          row.names = FALSE)
+
+
+
+# Filter data for Overall block
+overall_data_Recall <- results_overall_Recall %>%
+  filter(block == "Overall")
+
+#group_averages_overall <- aggregate(absavg ~ AgeGroup, data = overall_data, FUN = mean)
+
+
+# Create bar chart
+ggplot( overall_data_Recall , aes(x = ToD_Condition, y = absavg_recall)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(title = "Overall Mean Absolute error by ToD",
+       x = "ToD Group",
+       y = "Mean Absolute Error") +
+  theme_minimal()
+
+         
+
+# Calculate group averages by both ToD_Condition and Age_Category
+group_averages_overall_Age_ToD_Recall <- aggregate(absavg_recall ~ ToD_Condition + AgeGroup, data = overall_data_Recall , FUN = mean)
+
+# Create a custom color palette
+my_colors <- c("#FF5733", "#3498DB", "#F1C40F", "#2ECC71")
+
+# Create bar chart with customizations
+ggplot(group_averages_overall_Age_ToD_Recall, aes(x = ToD_Condition, y = absavg_recall, fill = AgeGroup)) +
+  geom_bar(stat = "identity", position = "dodge", color = "black", width = 0.7) +
+  labs(title = "Recall: Group Averages by ToD Condition and Age Category",
+       x = "ToD Group",
+       y = "Mean Absolute Error",
+       fill = "Age Group") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust = 1)) +  # Rotate x-axis labels
+  scale_fill_manual(values = my_colors) +  # Use custom color palette
+  geom_text(aes(label = paste("Mean:", round(absavg_recall, 2)), y = absavg_recall + 0.05), position = position_dodge(width = 0.7), vjust = -0.5, size = 3) +  # Add mean values as text labels above the bars
+  theme(plot.title = element_text(hjust = 0.5))  # Center the title
+# Perform two-way ANOVA
+anova_results_Recall <- aov(absavg_recall ~ ToD_Condition * AgeGroup, data = overall_data_Recall)
+
+# Print ANOVA table
+summary(anova_results_Recall)
+
+
+library(ggplot2)
+library(dplyr)
+
+# Filter data for Block 1, Block 2, and Block 3
+block_data_Recall <- results_overall_Recall %>%
+  filter(block %in% c("1", "2", "3"))
+
+# Calculate group averages by ToD_Condition, AgeGroup, and block
+group_averages_block_Age_ToD_Recall <- aggregate(absavg_recall ~ ToD_Condition + AgeGroup + block, data = block_data_Recall, FUN = mean)
+
+# Create a custom color palette for AgeGroup and ToD_Condition
+my_colors <- c("Morning.YA" = "#FF5733", "Night.YA" = "#F1C40F", 
+                               "Morning.OA" = "#3498DB", "Night.OA" = "#2ECC71")
+# Create bar chart with customizations, separate bars for each block
+ggplot(group_averages_block_Age_ToD_Recall, aes(x = block, y = absavg_recall, fill = interaction(ToD_Condition, AgeGroup))) + 
+  geom_bar(stat = "identity", position = "dodge", color = "black", width = 0.7) + 
+  labs(title = "Recall: Mean Absolute Error by Block, ToD Condition, and Age Group", 
+       x = "Block", 
+       y = "Mean Absolute Error", 
+       fill = "ToD Condition & Age Group") + 
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust = 1)) +  # Rotate x-axis labels
+  scale_fill_manual(values = c("Morning.YA" = "#FF5733", "Night.YA" = "#F1C40F", 
+                               "Morning.OA" = "#3498DB", "Night.OA" = "#2ECC71")) +  # Custom colors
+  geom_text(aes(label = round(absavg_recall, 2), y = absavg_recall + 0.05), 
+            position = position_dodge(width = 0.7), vjust = -0.5, size = 3) +  # Add mean values as text labels above the bars
+  theme(plot.title = element_text(hjust = 0.5))  # Center the title
+
+
+# Perform two-way ANOVA
+anova_results_block_Recall <- aov(absavg_recall ~ ToD_Condition * AgeGroup *block, data = block_data_Recall)
+
+# Print ANOVA table
+summary(anova_results_block_Recall)
+
+
+```
+
+```{r  reformat recall error for WIDE repeated measures  , echo=FALSE}
+
+# Remove 'Overall' row since it's not part of the repeated measures
+#recall_data_block <- results_overall_Recall %>% filter(block != "Overall")
+
+# Check structure
+#head(recall_data_block)
+
+recall_data_block <-  results_overall_Recall %>%
+    select(sub_id, block, absavg_recall, minavg_recall) %>%  # Keep only relevant columns
+    pivot_wider(names_from = block, values_from = c(absavg_recall, minavg_recall), names_prefix = "block") %>%
+    distinct(sub_id, .keep_all = TRUE)  # Ensure one row per participant
+
+# View results
+print(recall_data_block)
+
+
+
+recall_data_block_wide<-merge(AgeGroup_ToD_Cond,recall_data_block,by="sub_id")
+
+write.csv(recall_data_block_wide,
+          file = file.path(AbsErr_Data_Dir, "AbsAvgBlockRecall_WIDE.csv"),
+          row.names = FALSE)
+
+
+
+```
+
+
+```{r  Combine abs avg learning and recall , echo=FALSE}
+
+Abs_Average_Learning_Recall_Block<-merge(results_learning_overall,results_overall_Recall)
+
+
+write.csv(Abs_Average_Learning_Recall_Block,
+              file = file.path(AbsErr_Data_Dir,"AbsAvgBlockLearning_Recall_AllBlocks_NonVideo.csv"),
+            row.names = FALSE)
+
+
+
+```
+
+
+
+```{r Identify outliers for ToD data by block and overall for each age group,, echo=FALSE}
+
+# 
+# Read Recall Summary Data
+Summary_Recall_Data <- read.csv(file.path(Clean_Data_Dir, "Summary_Data_NonVideo.csv"))
+
+#filter out this subejct right away as they are 58 and not 60
+Summary_Recall_Data <-Summary_Recall_Data %>%
+  filter(SubID!="Sub067_ToD_Online")
+
+Summary_Recall_Data <- Summary_Recall_Data %>%
+  group_by(block) %>%
+  mutate(
+    z_CorrectRecallOld = (CorrectRecallOld - mean(CorrectRecallOld, na.rm = TRUE)) /
+                          sd(CorrectRecallOld, na.rm = TRUE),
+    z_ForgetRecallOld  = (ForgetRecallOld - mean(ForgetRecallOld, na.rm = TRUE)) /
+                          sd(ForgetRecallOld, na.rm = TRUE),
+    z_CorrectRecallNew = (CorrectRecallNew - mean(CorrectRecallNew, na.rm = TRUE)) /
+                          sd(CorrectRecallNew, na.rm = TRUE),
+    z_NewRecallOld     = (NewRecallOld - mean(NewRecallOld, na.rm = TRUE)) /
+                          sd(NewRecallOld, na.rm = TRUE),
+
+    # Separate outlier flags
+    Outlier_Block_CorrectRecallOld = abs(z_CorrectRecallOld) > 3,
+    Outlier_Block_ForgetRecallOld  = abs(z_ForgetRecallOld)  > 3,
+    Outlier_Block_CorrectRecallNew = abs(z_CorrectRecallNew) > 3,
+    Outlier_Block_NewRecallOld     = abs(z_NewRecallOld)     > 3,
+
+    # Any outlier across measures
+    Outlier_Block_Any =
+      Outlier_Block_CorrectRecallOld |
+      Outlier_Block_ForgetRecallOld  |
+      Outlier_Block_CorrectRecallNew |
+      Outlier_Block_NewRecallOld
+  ) %>%
+  ungroup()
+
+# View potential block-level outliers
+potential_outliers_block <- Summary_Recall_Data %>%
+  filter(Outlier_Block_Any)
+
+potential_outliers_block
+Z_Data_Group_Overall <- Summary_Recall_Data %>%
+  filter(block == "Overall") %>%
+  group_by(AgeGroup) %>%
+  mutate(
+    z_CorrectRecallOld = (CorrectRecallOld - mean(CorrectRecallOld, na.rm = TRUE)) /
+                          sd(CorrectRecallOld, na.rm = TRUE),
+    z_ForgetRecallOld  = (ForgetRecallOld - mean(ForgetRecallOld, na.rm = TRUE)) /
+                          sd(ForgetRecallOld, na.rm = TRUE),
+    z_CorrectRecallNew = (CorrectRecallNew - mean(CorrectRecallNew, na.rm = TRUE)) /
+                          sd(CorrectRecallNew, na.rm = TRUE),
+    z_NewRecallOld     = (NewRecallOld - mean(NewRecallOld, na.rm = TRUE)) /
+                          sd(NewRecallOld, na.rm = TRUE),
+
+    Outlier_Overall_CorrectRecallOld = abs(z_CorrectRecallOld) > 3,
+    Outlier_Overall_ForgetRecallOld  = abs(z_ForgetRecallOld)  > 3,
+    Outlier_Overall_CorrectRecallNew = abs(z_CorrectRecallNew) > 3,
+    Outlier_Overall_NewRecallOld     = abs(z_NewRecallOld)     > 3,
+
+    Outlier_Overall_Any =
+      Outlier_Overall_CorrectRecallOld |
+      Outlier_Overall_ForgetRecallOld  |
+      Outlier_Overall_CorrectRecallNew |
+      Outlier_Overall_NewRecallOld
+  ) %>%
+  ungroup()
+
+# View potential overall outliers
+potential_outliers_overall <- Z_Data_Group_Overall %>%
+  filter(Outlier_Overall_Any)
+
+potential_outliers_overall
+write.csv(
+  potential_outliers_overall,
+  file =  file.path(AbsErr_Data_Dir,"Recall_outliers_overall.csv"),
+  row.names = FALSE
+)
+#look at number who recalled less than 30
+
+low_recall_overall <- Summary_Recall_Data %>%
+  filter(block == "Overall" & CorrectRecallOld <=30)
+write.csv(low_recall_overall , 
+            file = file.path(AbsErr_Data_Dir,"LOW_CorrectRecallOld_Overall_Less30.csv"), 
+            row.names = FALSE) 
+
+Summary_Recall_Data <- Summary_Recall_Data %>%
+  group_by(SubID) %>% 
+  mutate(Chance_CorrectRecallOverall = any(block == "Overall" & CorrectRecallOld <= 30)) %>%
+  ungroup()
+
+
+
+AbsAvgLearningOnline<-  read.csv(file.path(AbsErr_Data_Dir,"AbsAvgBlockLearning_Recall_AllBlocks_NonVideo.csv"))
+  
+AbsAvgLearningOnlineOutliers<-AbsAvgLearningOnline%>%
+  select(sub_id,block,absavg_learning:outlier_Recall_Age)%>%
+  rename(SubID=sub_id)
+
+# Identify outliers in AbsAvgLearningOnline
+outlier_list <- AbsAvgLearningOnline %>%
+  filter(outlier_Learning_Age == TRUE) %>%
+  pull(sub_id,AgeGroup)
+
+# Filter out identified outliers from Summary_Recall_Data
+#Summary_Data_NoOutliers <- Summary_Recall_Data %>%
+
+  #filter(!participant %in% outlier_list)
+#merge dataframes together
+Summary_Abs_Data_All <- merge(
+  Summary_Recall_Data,
+  AbsAvgLearningOnlineOutliers,
+  by = c("SubID", "block"),
+  all.x = TRUE
+)
+
+Summary_Recall_Data_NoOutliers<-Summary_Abs_Data_All%>%
+  filter(block=="Overall")%>%
+  filter(SubID!="Sub001_ToD_Online")%>%
+  filter(SubID!="Sub054_ToD_Online")%>%
+  filter(SubID!="Sub058_ToD_Online")
+
+
+
+library(dplyr)
+summary_group_stats <-Summary_Recall_Data_NoOutliers %>%
+   filter(block=="Overall")%>%
+  group_by(ToD_Condition, AgeGroup) %>%
+  summarise(
+    mean_CorrectRecallOld = round(mean(CorrectRecallOld)),
+    se_CorrectRecallOld = round(sd(CorrectRecallOld) / sqrt(n())),
+    mean_ForgetRecallOld = round(mean(ForgetRecallOld)),
+    se_ForgetRecallOld = round(sd(ForgetRecallOld) / sqrt(n())),
+    mean_CorrectRecallNew = round(mean(CorrectRecallNew)),
+    se_CorrectRecallNew = round(sd(CorrectRecallNew) / sqrt(n())),
+    mean_NewRecallOld = round(mean(NewRecallOld)),
+    se_NewRecallOld = round(sd(NewRecallOld) / sqrt(n()))
+  )
+
+
+# Reshape the summarized data to long format
+summary_means <- summary_group_stats %>%
+  pivot_longer(cols = starts_with("mean_"), names_to = "ResponseType", values_to = "Mean") %>%
+  mutate(ResponseType = str_replace(ResponseType, "mean_", ""))
+
+summary_se <- summary_group_stats %>%
+  pivot_longer(cols = starts_with("se_"), names_to = "ResponseType", values_to = "SE") %>%
+  mutate(ResponseType = str_replace(ResponseType, "se_", ""))
+
+# Combine means and SEs
+summary_long <- inner_join(summary_means, summary_se, by = c("ToD_Condition", "AgeGroup", "ResponseType"))
+
+# Reshape the original summary data for individual points
+summary_data_long <- Summary_Recall_Data %>%
+  pivot_longer(cols = c(CorrectRecallOld, ForgetRecallOld, CorrectRecallNew, NewRecallOld),
+               names_to = "ResponseType", values_to = "Value")
+
+# Install and load RColorBrewer if not already installed
+install.packages("RColorBrewer")
+library(RColorBrewer)
+
+# Choose a palette and select specific colors
+selected_colors <- brewer.pal(5, "Set1")[c(2, 3, 1, 4)]  # Selecting specific colors
+
+# Plot
+Freq_Online<- ggplot() +
+  # Plot individual data points
+  geom_point(data = summary_data_long, aes(x = ToD_Condition, y = Value, color = ResponseType),
+             position = position_jitterdodge(jitter.width = 0.1, dodge.width = 0.9), size = 1.5, alpha = 0.6) +
+  # Plot bars for means
+  geom_bar(data = summary_long, aes(x = ToD_Condition, y = Mean, fill = ResponseType),
+           stat = "identity", position = position_dodge(width = 0.9), color = "black") +
+  # Plot error bars
+  geom_errorbar(data = summary_long, aes(x = ToD_Condition, ymin = Mean - SE, ymax = Mean + SE, group = ResponseType),
+                position = position_dodge(width = 0.9), width = 0.25) +
+  # Plot means as text
+  geom_text(data = summary_long, aes(x = ToD_Condition, y = Mean, label = round(Mean, 2), group = ResponseType),
+            position = position_dodge(width = 0.9), vjust = -0.5) +
+  # Facet by AgeGroup
+  facet_wrap(~ AgeGroup) +
+  # Labels and theme
+  labs(title = "Mean Number of Items Identified by Response Type, Age, and Time of Day",
+       x = "Time of Day",
+       y = "Mean Number of Responses",
+       fill = "Response Type",
+       color = "Response Type") +
+  # Apply the selected colors to fill and color
+  scale_color_manual(values = selected_colors) +
+  scale_fill_manual(values = selected_colors) +
+  theme_minimal() +
+  theme(
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 13, face = "bold"),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 14, face = "bold"),
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),  # Centered title
+    strip.text = element_text(size = 14, face = "bold")
+  )
+
+
+
+
+# Save to a specific folder
+#ggsave("/Users/juliamaybury/Desktop/MemoryPrecision_Analysis/Results_overall_Online/Plot/Recall_Perforomance_Video.jpg", plot =Freq_Online, width = 10, height = 4, dpi = 300)
+
+
+
+```
+
+```{r Recognition memory }, echo=FALSE}
+
+# Calculate recognition memory performance metrics
+RecognitionMemory_Summary <- Summary_Recall_Data %>%
+  filter(block=="Overall")%>%
+  mutate(
+    HitRate = CorrectRecallOld / (CorrectRecallOld + ForgetRecallOld),
+    FalseAlarmRate = NewRecallOld / (NewRecallOld + CorrectRecallNew),
+    RecognitionScore = HitRate-FalseAlarmRate
+  )
+
+RecognitionMemory_Summary %>%
+  group_by(AgeGroup) %>%  
+  summarise(
+    mean_HR = mean(HitRate, na.rm = TRUE),
+    sd_HR = sd(HitRate, na.rm = TRUE),
+    mean_FA = mean(FalseAlarmRate, na.rm = TRUE),
+    sd_FA = sd(FalseAlarmRate, na.rm = TRUE),
+    mean_Rec = mean( RecognitionScore, na.rm = TRUE),
+    sd_Rec = sd( RecognitionScore, na.rm = TRUE),
+    n = n()
+  )
+library(dplyr)
+
+RecognitionMemory_Summary <- RecognitionMemory_Summary%>%
+  group_by(AgeGroup) %>%
+  mutate(
+    z_HitRate = as.numeric(scale(HitRate)),
+    z_FalseAlarmRate = as.numeric(scale(FalseAlarmRate)),
+    z_RecognitionScore = as.numeric(scale(RecognitionScore)),
+    HR_outlier = abs(z_HitRate) > 3,       # strict: >3 SD
+    FA_outlier = abs(z_FalseAlarmRate) > 3,
+    Rec_outlier=abs(z_RecognitionScore) > 3
+  ) %>%
+  ungroup()
+
+
+
+Summary_All_Overall<-Summary_Recall_Data_NoOutliers%>%
+  filter(block=="Overall")%>%
+  select(SubID,absavg_learning:outlier_Recall_Age)
+
+Summary_All_Rec<-merge(Summary_All_Overall, RecognitionMemory_Summary, by="SubID")
+#Summary data frame for just the block overall!
+  
+
+write.csv(Summary_All_Rec,
+          file = file.path(Clean_Data_Dir, "MemoryABS_Rec_NonVideo.csv"),
+          row.names = FALSE)
+
+write.csv(Summary_All_Rec,
+          file = file.path(AbsErr_Data_Dir, "MemoryABS_Rec_NonVideo.csv"),
+          row.names = FALSE)
+
+
+
+```
+
+```{r  convert summary recall data to wide , echo=FALSE}
+
+# Remove 'Overall' row since it's not part of the repeated measures
+#recall_data_num_block <- Summary_Recall_Data  %>% filter(block != "Overall")
+
+AgeGroup_ToD_Cond <- read.csv(ageGroup_file)
+
+AgeGroup_ToD_Cond<-AgeGroup_ToD_Cond%>%
+  rename(
+  sub_id=SubID
+)
+
+recall_data_num_block<-Summary_Recall_Data%>%
+  rename(sub_id=SubID)
+
+# Check structure
+head(recall_data_num_block )
+
+recall_data_num_block  <- recall_data_num_block  %>%
+    select(sub_id, block, CorrectRecallOld, ForgetRecallOld,CorrectRecallNew, NewRecallOld) %>%  # Keep only relevant columns
+    pivot_wider(names_from = block, values_from = c(CorrectRecallOld, ForgetRecallOld,CorrectRecallNew, NewRecallOld), names_prefix = "block") %>%
+    distinct(sub_id, .keep_all = TRUE)  # Ensure one row per participant
+
+# View results
+print(recall_data_num_block)
+
+
+
+recall_data_num_block<-merge(AgeGroup_ToD_Cond, recall_data_num_block,by="sub_id")
+
+#write.csv(recall_data_num_block,
+       #   file = file.path(AbsErr_Data_Dir, "AbsAvgBlockSummary_WIDE.csv"),
+       #   row.names = FALSE)
+
+
+
+
+```
+
+
+
+```{r  Combine Learning and Recallfor abs error and Memroy data from sumamry data frame together , echo=FALSE}
+
+
+
+BlockDataAll <- merge(recall_data_block_wide, learning_data_block) %>%
+              merge(recall_data_num_block)
+
+
+write.csv(BlockDataAll,
+          file = file.path(AbsErr_Data_Dir, "BlockDataALL.csv"),
+          row.names = FALSE)
+
+
+```
+
+

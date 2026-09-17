@@ -1,0 +1,261 @@
+---
+title: "ToD_TrailData_Video_NonVideo"
+output: html_document
+date: "2026-09-08"
+---
+
+```{r setup, include=FALSE}
+# Clear console
+rm(list=ls())
+
+# Default setting. 
+knitr::opts_chunk$set(echo = TRUE)
+
+
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(purrr)
+library(tidyverse)
+
+
+
+
+```
+
+
+
+```{r update directories based on where folders are located, echo=FALSE}
+
+#directory configuration change /path/to with respective path for where the raw and cleaned data folders 
+
+
+base_path<-"C:/Users/julia/OneDrive/Desktop" #Change based on where folders are located
+
+
+ToD_VideoData_Dir <- file.path(base_path, "Cleaned_ToD_VideoData")
+Learning_Recall_Video_Dir <- file.path(ToD_VideoData_Dir, "Learning_Recall")
+ToD_NonVideoData_Dir <- file.path(base_path, "Cleaned_ToD_NonVideoData")
+Learning_Recall_NonVideo_Dir <- file.path(ToD_NonVideoData_Dir, "Learning_Recall")
+
+
+ToD_Video_NonVideo_Dir<- file.path(base_path, "ToD_Video_NonVideo_Data")
+
+Demo_Sleep_Dir_Video<- file.path(ToD_VideoData_Dir, "Demo_Sleep")
+Demo_Sleep_Dir_NonVideo<- file.path(ToD_NonVideoData_Dir, "Demo_Sleep")
+
+
+
+```
+
+
+
+```{r combine all Video data to have trial by trial data }
+
+
+#load in video trial data for each subject
+Video_files <- list.files(Learning_Recall_Video_Dir, pattern = "\\.csv$", full.names = TRUE)
+
+#function to bind all of the trial data together from each participant
+Video_TrialData <- Video_files %>%
+  lapply(function(f) {
+    read_csv(f) %>%
+      mutate(across(starts_with("resppos"), ~ as.numeric(str_trim(.))))
+  }) %>%
+  bind_rows()
+
+
+glimpse(Video_TrialData)#view trial data
+
+
+Video_TrialData<-Video_TrialData%>%
+  rename(SubjectID=participant)
+  
+  Video_TrialData <- Video_TrialData %>%
+  relocate(c(SubjectID, AgeGroup,ToD_Condition,Imm_Delay), .before = obj1)
+
+
+#save video trial data
+ write.csv(Video_TrialData , 
+            file = file.path(ToD_VideoData_Dir, "VideoTrialData.csv"), 
+            row.names = FALSE)
+
+
+```
+
+```{r combine all Non-Video data to have trial by trial data }
+
+#load in Non-video data for each subject
+NonVideo_files <- list.files(Learning_Recall_NonVideo_Dir, pattern = "\\.csv$", full.names = TRUE)
+
+#combine
+NonVideo_TrialData <- NonVideo_files %>%
+  lapply(function(f) {
+    read_csv(f) %>%
+      mutate(across(starts_with("resppos"), ~ as.numeric(str_trim(.))))
+  }) %>%
+  bind_rows()
+
+glimpse(NonVideo_TrialData)
+
+#reformat variabel names
+NonVideo_TrialData<-NonVideo_TrialData%>%
+  select(-testObj1Foil:-testObj1FCrightItem)%>%
+  rename(SubjectID=SubID)%>%
+  relocate(c(SubjectID, AgeGroup,ToD_Condition,Imm_Delay), .before = obj1)
+
+
+
+#save trial by trial Non-Vdieo Data (all subjects combined)
+ write.csv(NonVideo_TrialData , 
+            file = file.path(ToD_NonVideoData_Dir, "NonVideo_TrialData.csv"), 
+            row.names = FALSE)
+
+
+
+```
+
+
+```{r bind all trial by trial data together }
+
+#combine video and non-video trial data together to single dataframe
+
+#add format condition to Video dataset and filter out any participants who were classified as outliers (detailed in paper)
+TrialVideo <- Video_TrialData %>%
+  mutate(format = "Video")%>%
+    filter(
+    !SubjectID %in% c(
+      "Sub002_ToD",
+      #outlier on memory measure and poor video connection
+      "Sub073_ToD",
+      #outlier on memory measure
+      "Sub074_ToD",
+      #outlier on memory measure
+      "Sub134_ToD",
+        #outlier on memory measure
+      "Sub065_ToD",
+        #outlier on memory measure
+      "Sub152_ToD",
+        #outlier on memory measure
+      "Sub148_ToD"
+      
+    )
+  )
+  
+
+#add format condition to non-video (online) data set and filter any outliers (detailed in paper)
+TrialNonVideo <- NonVideo_TrialData %>%
+  mutate(format = "Non_Video",
+         collected_by="Julia") %>%
+  filter(
+    !SubjectID %in% c(
+      "Sub001_ToD_Online",
+      #outlier on memory measure
+      "Sub054_ToD_Online",
+      #outlier on memory measure
+      "Sub058_ToD_Online",
+      #outlier on memory measure
+      "Sub067_ToD_Online" #58 years old so need to exclude as older adult age group starts at 60
+    )
+    
+  )
+
+
+#Combine all Trial by Trial Memory data from two experiment formats
+TrialAll <- bind_rows(TrialVideo, TrialNonVideo)
+
+#Clean Trial Data Subject ID to match Sleep data
+TrialAll <- TrialAll %>%
+  mutate(original = SubjectID,
+         SubjectID = paste0(                   
+           str_extract(original, "Sub\\d+"),
+           "_ToD_",
+           if_else(str_detect(original, "Online"), "Online", "Video")
+         )) %>%
+  select(-original)%>%
+  relocate(format,.before=Imm_Delay)
+
+
+#save video, non-video trail all data                                                                                                                                       
+
+ write.csv(TrialAll , 
+            file = file.path(ToD_Video_NonVideo_Dir, "NonVideo_Video_TrialData.csv"), 
+            row.names = FALSE)                     
+
+                                                                                                                                                                                          
+#Load in Sleep Data + PSQI and MEQ Questionnaires from online non-video format
+#Note PSQI and Sleep Data contain all participants, once combined with trial data those who were outliers from memory data will be filtered out in combined dataset
+SleepPSQI_MEQNonVideo<- read.csv(file.path(Demo_Sleep_Dir_NonVideo,"PSQI_MEQ_Cond_Ages_All_NonVideo.csv"))
+
+
+#Select only necessary columns to combine to the memory data
+SleepPSQI_MEQNonVideo <- SleepPSQI_MEQNonVideo %>%
+  select(-Distractor,-Distractor_MEQ) 
+
+#load sleep data from PSQI and MEQ video format
+SleepPSQI_MEQVideo <- read.csv(file.path(Demo_Sleep_Dir_Video,"PSQI_MEQ_Cond_Ages_All_Video.csv"))
+
+#select necessary columns and rename subID to match
+SleepPSQI_MEQVideo <- SleepPSQI_MEQVideo %>%
+  rename(SubID = participant) %>%
+  mutate(SubID = paste0(SubID, "_Video")) 
+
+#Bind together all sleep data from two Experiment Formats
+SleepAll <- bind_rows(SleepPSQI_MEQVideo, SleepPSQI_MEQNonVideo)
+SleepAll <- SleepAll %>%
+  rename(SubjectID = SubID)%>%
+  select(-AgeGroup,-ToD_Condition,-collected_by)
+
+#Merge all Trail data and Sleep Data to one dataframe for analysis
+TrialAll <- merge(TrialAll, SleepAll, by = "SubjectID")
+
+
+
+#Compute error used for modeling (target-response) and Relabel factors
+TrialAll <- TrialAll %>%
+  mutate(
+    AgeGroup = recode(AgeGroup, "YA" = "Young", "OA" = "Old"),
+    AgeGroup = factor(AgeGroup, levels = c("Young", "Old")),
+    format = factor(format, levels = c("Video", "Non_Video")),
+    ToD_Condition = factor(ToD_Condition, levels = c("Morning", "Night")),
+    SubjectID = factor(SubjectID),
+    MatchCondition = factor(MatchCondition),
+    Chronotype = factor(Chronotype),
+    MedianSplit_MEQ = factor(MedianSplit_MEQ),
+    error = atan2(sin((locresp2_adj - testObj1LocTargetVal) * pi / 180), cos((locresp2_adj - testObj1LocTargetVal) * pi / 180))
+  )
+
+TrialAll$MEQ_z <- as.numeric(scale(TrialAll$MEQScore))
+
+TrialAll <- TrialAll %>%
+  relocate(error, .before = collected_by)%>%
+  relocate(MEQ_z, .after = MEQScore)
+
+
+
+
+#Check Counts for age group, experiment format, time of day condition prior to modelling to ensure factors relabeled correctly
+unique_dataTrialAll <- TrialAll %>%
+  distinct(SubjectID, AgeGroup, ToD_Condition, format)
+counts <- unique_dataTrialAll %>%
+  count(AgeGroup, ToD_Condition, format)
+counts
+
+table(
+  unique_dataTrialAll$AgeGroup,
+  unique_dataTrialAll$ToD_Condition,
+  unique_dataTrialAll$format
+)
+
+ 
+  
+#save video, non-video trail all data plus sleep data that will be used for modelling
+
+ write.csv(TrialAll , 
+            file = file.path(ToD_Video_NonVideo_Dir, "NonVideo_Video_TrialData_SleepData_Final.csv"), 
+            row.names = FALSE)
+ 
+
+
+```

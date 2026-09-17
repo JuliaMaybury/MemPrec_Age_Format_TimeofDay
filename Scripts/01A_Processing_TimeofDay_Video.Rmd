@@ -1,0 +1,693 @@
+---
+title: "Preprosessing and Cleaning of Time of Day Video Format Data"
+author: "Julia Maybury"
+date: '2024-04-09'
+output: html_document
+---
+
+```{r important libraries, include=FALSE}
+# Clear console
+rm(list=ls())
+
+# Default setting. 
+knitr::opts_chunk$set(echo = TRUE)
+
+library(data.table)
+library(tidyverse)
+library(ggplot2)
+library(purrr)
+library(bayestestR)
+library(posterior)
+
+
+```
+
+```{r setting directories for reproducability, echo=FALSE}
+
+
+# Configuration — change these path as needed based on where folders are located
+#Raw Data is stored in Raw_ToD_VideoData for each subject 
+#Once data is cleaned it is stored in Cleaned_ToD_VideoData
+#inside Cleaned_ToD_VideoData have a Learning Folder with OA and YA in each and then a Recall folder with OA and YA in each
+#Also have a Learning Recall folder that has the learning and recall data together
+#Age group conditions file (time of day ect) is located in the Cleaned folder
+
+
+
+Raw_Data_Dir      <- "/Users/juliamaybury/Desktop/Raw_ToD_VideoData" #replace these with the Raw_ToD_VideoData folder is located
+Clean_Data_Dir    <- "/Users/juliamaybury/Desktop/Cleaned_ToD_VideoData"#replace these with the Cleaned_ToD_VideoData folder is located
+
+Learning_dir_YA <- file.path(Clean_Data_Dir, "Learning", "YA")
+Learning_dir_OA <- file.path(Clean_Data_Dir, "Learning", "OA")
+
+Recall_dir_YA   <- file.path(Clean_Data_Dir, "Recall", "YA")
+Recall_dir_OA   <- file.path(Clean_Data_Dir, "Recall", "OA")
+
+Learn_Recall_YA <- file.path(Clean_Data_Dir, "Learning_Recall", "YA")
+Learn_Recall_OA <- file.path(Clean_Data_Dir, "Learning_Recall", "OA")
+
+
+ageGroup_file     <- file.path(Clean_Data_Dir, "AgeGroup_Con.csv")
+
+
+```
+
+
+```{r important data set, echo=FALSE}
+
+
+#path to raw video session online data
+list_of_files = list.files(path = Raw_Data_Dir,
+                            pattern = "\\.csv$", 
+                            full.names = TRUE)
+Pilotdata <- rbindlist(sapply(list_of_files, fread, simplify = FALSE),
+                       use.names = TRUE, fill = TRUE, idcol = "ID")
+
+
+IDs <- IDs <- gsub(".*/data_(Sub\\d+_ToD).*", "\\1", list_of_files)
+
+# Get the length of each file
+file_lengths <- sapply(list_of_files, function(file) nrow(fread(file)))
+
+diff_file_index <- which(file_lengths != file_lengths[1])
+
+# Repeat IDs for files with the same length
+if (length(diff_file_index) == 0) {
+  Pilotdata$ID <- rep(IDs, each = file_lengths[1])
+} else {
+  # Handle the file with a different length
+  Pilotdata$ID <- rep(IDs[-diff_file_index], each = file_lengths[-diff_file_index])
+  
+  
+  # Repeat the ID for the file with different length
+  Pilotdata$ID <- c(Pilotdata$ID, rep(IDs[diff_file_index], each = file_lengths[diff_file_index]))
+}
+
+AgeGroup_ToD_Cond <- read.csv(ageGroup_file)
+
+
+
+```
+
+
+```{r Clean data Learning, echo=FALSE}
+
+
+####Cleans Raw ToD Video testing session data and saves Learning block data in respective age folders (YA) (OA)####
+
+# Initialize an empty data frame to store data for learning reacting times
+AllParticipants_Learning_Avg <- data.frame(
+  participant = character(),
+  AgeGroup = character(),
+  ToD_Condition = character(),
+  Avg_Learning_Loc_Test_rt = numeric(),
+  stringsAsFactors = FALSE
+)
+
+for (file in list_of_files) {
+  # Read the data from the CSV file
+  data <- read.csv(file)
+  
+  library(dplyr)
+  #select data columns that we want
+  RawPilotTimeDay.Learning <- data %>%
+    select(
+      participant,
+      condnum,
+      locresp1,
+      locresp1_adj,
+      key_resp_Learn.keys,
+      key_resp_Test.keys,
+      respposX1,
+      respposY1,
+      respposX2,
+      respposY2,
+      obj1:testNewLocStartVal,
+      key_respWM_5.rt,
+      key_resp_Prac_Learn.rt,
+      FCKey2_3.keys,
+      FCKey2_3.rt,
+      key_resp_Learn.rt,
+      key_resp_Test.rt,
+      locresp2,
+      locresp2_adj,
+      FCKey2_4.keys,
+      FCKey2_4.rt,
+      FCKey2.keys,
+      FCKey2.rt,
+      FCKey2_2.keys,
+      FCKey2_2.rt,
+      Imm_Delay,
+      NewObject,
+      -(testObj1Foil:testObj1FCrightItem)
+    ) %>%
+    # Rename columns for easier reference
+    rename(
+      Learning_Loc_Test_Prac_rt = key_resp_Prac_Learn.rt,
+      Old_New_Prac = FCKey2_3.keys,
+      Old_New_Prac_rt = FCKey2_3.rt,
+      Remember_Prac_Min = FCKey2_4.keys,
+      Remember_Prac_rt = FCKey2_4.rt,
+      Old_New_Test = FCKey2.keys,
+      Old_New_Test_rt = FCKey2.rt,
+      Remember_Test = FCKey2_2.keys,
+      Remember_Test_rt = FCKey2_2.rt,
+      Recall_Loc_Test_Prac_rt = key_respWM_5.rt,
+      Learning_Loc_Test_rt = key_resp_Learn.rt,
+      Recall_Loc_Test_rt = key_resp_Test.rt
+    ) %>%
+    # Filter to include only relevant rows
+    filter(data$key_resp_Learn.keys == "space")
+  
+  # Get condition number from the fourth row and "condnum" column
+  Condition <- as.integer(unlist(data[4, "condnum"]))
+  RawPilotTimeDay.Learning$condnum <- rep(Condition, nrow(RawPilotTimeDay.Learning))
+  
+  # Filter and reorganize the data
+  PilotTimeDay.Learning_Delay1 <- RawPilotTimeDay.Learning %>%
+    filter(Imm_Delay == 1) %>%
+    filter(key_resp_Learn.keys == "space") %>%
+    select(
+      -Old_New_Prac,
+      -Old_New_Prac_rt,
+      -Remember_Prac_Min,
+      -NewObject,
+      -key_resp_Learn.keys,
+      -key_resp_Test.keys,
+      -testNewLocStartVal,
+      -Learning_Loc_Test_Prac_rt,
+      -Recall_Loc_Test_Prac_rt
+    ) %>%
+    relocate(locresp1:locresp1_adj, .after = testObj1Target) %>%
+    relocate(respposX2:respposY2, .before = locresp2) %>%
+    relocate(Old_New_Test_rt, .after = Old_New_Test) %>%
+    relocate(Remember_Test_rt, .after = Remember_Test) %>%
+    relocate(Learning_Loc_Test_rt, .after = locresp1_adj) %>%
+    relocate(Recall_Loc_Test_rt, .after = locresp2_adj)
+  
+  # Replace empty strings with NA
+  PilotTimeDay.Learning_Delay1[PilotTimeDay.Learning_Delay1 == ""] <- NA
+  
+  # Retrieve participant's ID and find corresponding AgeGroup and ToD_Condition
+  subject_ID <- unique(PilotTimeDay.Learning_Delay1$participant)[1]
+  participantRow <- AgeGroup_ToD_Cond[AgeGroup_ToD_Cond$participant == subject_ID, ]
+  
+  if (nrow(participantRow) > 0) {
+    # Retrieve AgeGroup and ToD_Condition
+    AgeGroup <- participantRow$AgeGroup
+    ToD_Condition <- participantRow$ToD_Condition
+    
+    # Merge the condition data
+    PilotTimeDay.Learning_Delay1 <- merge(PilotTimeDay.Learning_Delay1,
+                                          participantRow,
+                                          by = "participant",
+                                          all.x = TRUE)
+    
+    # Calculate the average Learning_Loc_Test_rt for the participant
+    Avg_Learning_Loc_Test_rt <- mean(PilotTimeDay.Learning_Delay1$Learning_Loc_Test_rt,
+                                     na.rm = TRUE)
+    
+    # Add the result to the combined dataframe
+    AllParticipants_Learning_Avg <- rbind(
+      AllParticipants_Learning_Avg,
+      data.frame(
+        participant = subject_ID,
+        AgeGroup = AgeGroup,
+        ToD_Condition = ToD_Condition,
+        Avg_Learning_Loc_Test_rt = Avg_Learning_Loc_Test_rt
+      )
+    )
+    
+    # Write individual participant CSV learning data based on AgeGroup
+    if (AgeGroup == "YA") {
+      write.csv(
+        PilotTimeDay.Learning_Delay1,
+        file = file.path(Learning_dir_YA, paste0(subject_ID, "_Learning.csv")),
+        row.names = FALSE
+      )
+    } else if (AgeGroup == "OA") {
+      write.csv(
+        PilotTimeDay.Learning_Delay1,
+        file = file.path(Learning_dir_OA, paste0(subject_ID, "_Learning.csv")),
+        row.names = FALSE
+      )
+    }
+  } else {
+    cat('Participant', subject_ID, 'not found in the data frame.\n')
+  }
+}
+
+# Print the final dataframe with average reaction times
+print(AllParticipants_Learning_Avg)
+
+# Save learning average data frame for later to look at potential outliers on learning dta
+
+write.csv(
+  AllParticipants_Learning_Avg,
+  file.path(
+    Clean_Data_Dir,
+    "AllParticipants_Learning_Avg_ReactionTime.csv"
+  ),
+  row.names = FALSE
+)
+
+
+```
+
+```{r Clean Data Recall, echo=FALSE}
+
+
+####Cleans the Recall block Data and again saves it into respective age group folders####
+
+#create a summary dataframe for the Recall Data
+summary_data <- data.frame()
+# Initialize the Average_ReactionTimes Recall data frame with the required columns
+Average_ReactionTimes <- data.frame(
+  participant = character(),
+  # AgeGroup = character(),
+  # ToD_Condition = character(),
+  Avg_Recall_Loc_Test_rt = numeric(),
+  Avg_Old_New_Test_rt = numeric(),
+  Avg_Remember_Test_rt = numeric(),
+  Avg_Old_Recall_Test_rt = numeric(),
+  Avg_New_Recall_Test_rt = numeric(),
+  Avg_Obj_Loc_Remember_Test_rt = numeric(),
+  Avg_Obj_Remember_Test_rt = numeric(),
+  stringsAsFactors = FALSE
+)
+
+for (i in seq_along(list_of_files)) {
+  # Get the index using modulus operator, adjusted to start from 1
+  index <- (i - 1) %% length(list_of_files) + 1
+  
+  # Get the file name using the index
+  file <- list_of_files[index]
+  
+  # Read the data from the CSV file
+  data <- read.csv(file)
+  ###Recall Data
+  
+  library(dplyr)
+  
+  PilotTimeDayRecall <- data %>%
+    select(
+      participant,
+      condnum,
+      key_resp_Learn.keys,
+      respposX2,
+      respposY2,
+      obj1:testNewLocStartVal,
+      locresp2,
+      locresp2_adj,
+      key_resp_Test.rt,
+      FCKey2.keys,
+      FCKey2.rt,
+      FCKey2_2.keys,
+      FCKey2_2.rt,
+      Imm_Delay,
+      NewObject,-(testObj1Foil:testObj1FCrightItem)
+    ) %>%
+    #rename columns of interest
+    rename(
+      Old_New_Test = FCKey2.keys,
+      Old_New_Test_rt = FCKey2.rt,
+      Remember_Test = FCKey2_2.keys,
+      Remember_Test_rt = FCKey2_2.rt,
+      Recall_Loc_Test_rt = key_resp_Test.rt
+    ) %>%
+    
+    filter(data$key_resp_Learn.keys != "space")
+  
+  
+  # Get condition number from the fourth row and "condnum" column
+  Condition <- as.integer(unlist(data[4, "condnum"]))
+  #Condition <- data[4, "condnum"][1]
+  
+  # Repeat the condition number throughout the entire dataframe
+  PilotTimeDayRecall$condnum <- rep(Condition, nrow(PilotTimeDayRecall))
+  
+  
+  #if intrested in any object that the responded location to
+  #filter(PilotTimeDayRecall$key_resp_Test.keys=="space")
+  
+  #move rows as the data is shifted
+  rows_to_move <- which(PilotTimeDayRecall$Imm_Delay == 1)
+  
+  # Loop through each row and move the values from the row above
+  for (row_index in rows_to_move) {
+    PilotTimeDayRecall[row_index, c(
+      'respposX2',
+      'respposY2',
+      'locresp2',
+      'locresp2_adj',
+      'Recall_Loc_Test_rt',
+      'Old_New_Test',
+      'Old_New_Test_rt',
+      'Remember_Test',
+      'Remember_Test_rt'
+    )] <- PilotTimeDayRecall[row_index - 1, c(
+      'respposX2',
+      'respposY2',
+      'locresp2',
+      'locresp2_adj',
+      'Recall_Loc_Test_rt',
+      'Old_New_Test',
+      'Old_New_Test_rt',
+      'Remember_Test',
+      'Remember_Test_rt'
+    )]
+  }
+  
+  # Remove the now empty rows
+  PilotTimeDayRecall <- PilotTimeDayRecall[-(rows_to_move - 1), ]
+  
+  #Check to verify that cleaned dataset have the correct number of trials
+  #New and old Images in Immediate_Delay: should be 84: 60 old and 24 new
+  PilotTimeDayRecallImmDelay <- PilotTimeDayRecall %>%
+    filter(PilotTimeDayRecall$Imm_Delay == 1)
+  PilotTimeDayRecallOLDImmDelay <- PilotTimeDayRecallImmDelay %>%
+    filter(PilotTimeDayRecallImmDelay$OldImages == 1)
+  
+  #filter out data so we just have what was tested in the immediate delay: note this also includes the new objects but we want to keep this in now to calc forgotten/misjudged as old etc.
+  PilotTimeDayRecall_Delay1 <- PilotTimeDayRecall %>%
+    
+    filter(Imm_Delay == 1) #This should be 84
+  
+  PilotTimeDayRecall_Delay1Remember <- PilotTimeDayRecall_Delay1 %>%
+    filter(Remember_Test != "NA")
+  
+  #interested in recall by block so get summary data for each block to later test for block effect
+  block_summary <- PilotTimeDayRecall_Delay1 %>%
+    group_by(block) %>%  # Group by block
+    summarise(
+      CorrectRecallOld = sum(Old_New_Test == 1 &
+                               OldImages == 1, na.rm = TRUE),
+      ForgetRecallOld = sum(Old_New_Test == 2 &
+                              OldImages == 1, na.rm = TRUE),
+      CorrectRecallNew = sum(Old_New_Test == 2 &
+                               OldImages == 0, na.rm = TRUE),
+      NewRecallOld = sum(Old_New_Test == 1 &
+                           OldImages == 0, na.rm = TRUE)
+    ) %>%
+    ungroup()
+  
+  block_summary_overall <- PilotTimeDayRecall_Delay1 %>%
+    summarise(
+      CorrectRecallOld = sum(Old_New_Test == 1 &
+                               OldImages == 1, na.rm = TRUE),
+      ForgetRecallOld = sum(Old_New_Test == 2 &
+                              OldImages == 1, na.rm = TRUE),
+      CorrectRecallNew = sum(Old_New_Test == 2 &
+                               OldImages == 0, na.rm = TRUE),
+      NewRecallOld = sum(Old_New_Test == 1 &
+                           OldImages == 0, na.rm = TRUE)
+    ) %>%
+    mutate(block = "Overall")  # Label for overall summary
+  
+  #combine all data incuding by block data
+  All_summary <- rbind(block_summary, block_summary_overall)
+  All_summary$participant <- unique(PilotTimeDayRecall_Delay1$participant)
+  All_summary$ToD_Condition <- unique(PilotTimeDayRecall_Delay1$ToD_Condition)
+  All_summary$AgeGroup <- unique(PilotTimeDayRecall_Delay1$AgeGroup)
+  
+  participant_id <- unique(PilotTimeDayRecall$participant)
+  
+  Summary_Long <- All_summary %>%
+    filter(block == "Overall") %>%
+    pivot_longer(
+      cols = c(
+        CorrectRecallOld,
+        ForgetRecallOld,
+        CorrectRecallNew,
+        NewRecallOld
+      ),
+      # Ensure correct column names
+      names_to = "Category",
+      values_to = "Value"
+    )
+  
+  Summ_Old_New <- ggplot(Summary_Long, aes(x = Category, y = Value, fill = Category)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    
+    # Add the value of each bar on top
+    geom_text(
+      aes(label = Value),
+      position = position_dodge(width = 0.9),
+      vjust = -0.5,
+      # Adjust position above the bars
+      size = 3
+    ) +    # Set text size +
+    labs(
+      title = paste("Old/New Remember Responses - Participant:", participant_id),
+      # Include subject ID
+      x = "Type",
+      y = "Number"
+    ) +
+    theme_minimal()
+  
+  print(Summ_Old_New)
+  
+  
+  
+  #data frame for only objects that were old and also correctly recalled as old
+  #this is really what we will be comparing the the learning to as objects that are classifed as new even if old do not have a location judgement
+  PilotTimeDayRecall_Old <- PilotTimeDayRecall %>%
+    
+    filter(Old_New_Test == 1 & OldImages == 1) %>%
+    select(-NewObject, -key_resp_Learn.keys, -testNewLocStartVal)
+  #relocate(locresp1:locresp1_adj, .after = OldImages)%>%
+  #relocate(respposX1:respposY1, .before = locresp1)
+  PilotTimeDayRecall_Old[PilotTimeDayRecall_Old == ""] <- NA
+  
+  
+  subject_ID <- unique(PilotTimeDayRecall_Old$participant)[1]
+  
+  
+  # Find the row where 'Subject' matches the participant
+  participantRow <- AgeGroup_ToD_Cond[AgeGroup_ToD_Cond$participant == subject_ID, ]
+  
+  # Check if the participant exists in the data frame
+  if (nrow(participantRow) > 0) {
+    # Retrieve data from other columns for the participant
+    AgeGroup <- participantRow$AgeGroup
+    ToD_Condition <- participantRow$Condition
+    
+    # Display retrieved data
+    cat('Participant:', subject_ID, '\n')
+    cat('Age Group:', AgeGroup, '\n')
+    cat('Condition:', ToD_Condition, '\n')
+  } else {
+    cat('Participant', Subject_ID, 'not found in the data frame.\n')
+  }
+  PilotTimeDayRecall_Old <- merge(PilotTimeDayRecall_Old,
+                                  participantRow,
+                                  by = "participant",
+                                  all.x = TRUE)
+  Old_New_Remember <- merge(All_summary, participantRow, by = "participant")
+  summary_data <- rbind(summary_data, Old_New_Remember)
+  
+  
+  if (AgeGroup == "YA") {
+    write.csv(
+      PilotTimeDayRecall_Old,
+      file = file.path(Recall_dir_YA, paste0(subject_ID, "_Recall.csv")),
+      row.names = FALSE
+    )
+  } else {
+    write.csv(
+      PilotTimeDayRecall_Old,
+      file = file.path(Recall_dir_OA, paste0(subject_ID, "_Recall.csv")),
+      row.names = FALSE
+    )
+  }
+  
+
+  
+  #reaction time
+  # Calculate average reaction times
+  Avg_Recall_Loc_Test_rt <- mean(PilotTimeDayRecall_Delay1$Recall_Loc_Test_rt, na.rm = TRUE)
+  Avg_Old_New_Test_rt <- mean(PilotTimeDayRecall_Delay1$Old_New_Test_rt, na.rm = TRUE)
+  Avg_Remember_Test_rt <- mean(PilotTimeDayRecall_Delay1$Remember_Test_rt, na.rm = TRUE)
+  
+  
+  # Calculate average reaction times for "old" items
+  Avg_Old_Recall_Test_rt <- mean(PilotTimeDayRecall_Delay1$Old_New_Test_rt[PilotTimeDayRecall_Delay1$Old_New_Test == 1], na.rm = TRUE)
+  
+  # Calculate average reaction times for "new" items
+  Avg_New_Recall_Test_rt <- mean(PilotTimeDayRecall_Delay1$Old_New_Test_rt[PilotTimeDayRecall_Delay1$Old_New_Test == 2], na.rm = TRUE)
+  
+  # Calculate average reaction times for "obj and location" (Remember_Test == 1)
+  Avg_Obj_Loc_Remember_Test_rt <- mean(PilotTimeDayRecall_Delay1$Remember_Test_rt[PilotTimeDayRecall_Delay1$Remember_Test == 1], na.rm = TRUE)
+  
+  # Calculate average reaction times for "object only" (Remember_Test == 2)
+  Avg_Obj_Remember_Test_rt <- mean(PilotTimeDayRecall_Delay1$Remember_Test_rt[PilotTimeDayRecall_Delay1$Remember_Test == 2], na.rm = TRUE)
+  
+  
+  #append to recation time dataframe
+  Average_ReactionTimes <- rbind(
+    Average_ReactionTimes,
+    data.frame(
+      participant = subject_ID,
+      Avg_Recall_Loc_Test_rt = Avg_Recall_Loc_Test_rt,
+      Avg_Old_New_Test_rt = Avg_Old_New_Test_rt,
+      Avg_Remember_Test_rt = Avg_Remember_Test_rt,
+      Avg_Old_Recall_Test_rt = Avg_Old_Recall_Test_rt,
+      Avg_New_Recall_Test_rt = Avg_New_Recall_Test_rt,
+      Avg_Obj_Loc_Remember_Test_rt = Avg_Obj_Loc_Remember_Test_rt,
+      Avg_Obj_Remember_Test_rt = Avg_Obj_Remember_Test_rt
+    )
+  )
+  
+}
+
+
+##This is the dataframe that has by block correctly identified as old, correctly identified as new, forgotten old, new recalled as old
+write.csv(summary_data,
+          file.path(Clean_Data_Dir, "Summary_Data_Video.csv"),
+          row.names = FALSE)
+
+
+
+# Merge with the AllParticipants_Learning_Avg dataframe to include Avg_Learning_Loc_Test_rt
+Combined_ReactionTimes <- merge(
+  Average_ReactionTimes,
+  AllParticipants_Learning_Avg,
+  by = c("participant"),
+  all.y = TRUE
+)
+
+# Save the merged dataframe to a CSV file
+write.csv(
+  Combined_ReactionTimes,
+  file.path(Clean_Data_Dir, "Combined_Average_ReactionTimes.csv"),
+  row.names = FALSE
+)
+
+
+```
+
+```{r Identify reaction time outliers }, echo=FALSE}
+
+# Function to flag outliers (3 SD above or below the mean) for each variable by Gae group
+flag_outliers <- function(df, variable) {
+  df %>%
+    group_by(AgeGroup) %>%
+    mutate(!!paste0(variable, "_outlier") := ifelse(
+      (!!sym(variable) > mean(!!sym(variable), na.rm = TRUE) + 3 * sd(!!sym(variable), na.rm = TRUE)) | 
+      (!!sym(variable) < mean(!!sym(variable), na.rm = TRUE) - 3 * sd(!!sym(variable), na.rm = TRUE)), TRUE, FALSE)) %>%
+    ungroup()
+}
+
+# List of reaction time variables to check
+rt_vars <- c("Avg_Recall_Loc_Test_rt", "Avg_Learning_Loc_Test_rt",
+            "Avg_Old_New_Test_rt", "Avg_Old_Recall_Test_rt", "Avg_New_Recall_Test_rt", "Avg_Remember_Test_rt",
+             "Avg_Obj_Loc_Remember_Test_rt", "Avg_Obj_Remember_Test_rt")
+
+# Apply the outlier function for each variable
+Combined_ReactionTimes_outliers <- Combined_ReactionTimes
+for (var in rt_vars) {
+  Combined_ReactionTimes_outliers <- flag_outliers(Combined_ReactionTimes_outliers, var)
+}
+
+  Combined_ReactionTimes_outliers<-  Combined_ReactionTimes_outliers%>%
+    relocate(Avg_Recall_Loc_Test_rt_outlier, .after = Avg_Recall_Loc_Test_rt) %>%
+    relocate(Avg_Old_New_Test_rt_outlier, .after = Avg_Old_New_Test_rt) %>%
+    relocate(Avg_Learning_Loc_Test_rt_outlier, .after = Avg_Learning_Loc_Test_rt) %>%
+    relocate(Avg_Remember_Test_rt_outlier, .after = Avg_Remember_Test_rt) %>%
+   relocate(Avg_Old_Recall_Test_rt_outlier, .after =Avg_Old_Recall_Test_rt) %>%
+   relocate(Avg_New_Recall_Test_rt_outlier, .after = Avg_New_Recall_Test_rt) %>%
+   relocate(Avg_Obj_Loc_Remember_Test_rt_outlier, .after = Avg_Obj_Loc_Remember_Test_rt) %>%
+   relocate( Avg_Obj_Remember_Test_rt_outlier, .after = Avg_Obj_Remember_Test_rt) 
+ 
+
+# Filter to keep only rows where any of the outlier columns is TRUE
+# Create a condition to check if any outlier flag is TRUE
+outlier_cols <- paste0(rt_vars, "_outlier")
+outliers_only <- Combined_ReactionTimes_outliers %>%
+  filter(if_any(all_of(outlier_cols), ~ . == TRUE))%>%
+  
+
+# View the resulting dataframe with only outliers
+print(outliers_only)
+
+
+# Save the merged dataframe to a CSV file
+write.csv(
+  Combined_ReactionTimes_outliers,
+  file.path(Clean_Data_Dir, "Combined_Average_ReactionTimes_Outliers.csv"),
+  row.names = FALSE
+)
+# Save the merged dataframe to a CSV file
+write.csv(
+  outliers_only,
+  file.path(Clean_Data_Dir, "Reaction_Times_outliers_only.csv"),
+  row.names = FALSE
+)
+
+
+```
+
+ 
+```{r bind learning and recall together for YA and OA}, echo=FALSE}
+
+
+
+# Combine YA + OA learning files
+learning_files <- c(
+  list.files(Learning_dir_YA, pattern="\\.csv$", full.names=TRUE),
+  list.files(Learning_dir_OA, pattern="\\.csv$", full.names=TRUE)
+)
+
+# Combine YA + OA recall files
+recall_files <- c(
+  list.files(Recall_dir_YA, pattern="\\.csv$", full.names=TRUE),
+  list.files(Recall_dir_OA, pattern="\\.csv$", full.names=TRUE)
+)
+
+for (i in seq_along(learning_files)) {
+
+  Learning <- read.csv(learning_files[i])
+  Recall   <- read.csv(recall_files[i])
+
+  # Keep only learning columns needed for merge
+  Learning <- Learning %>%
+    select(obj1, locresp1, locresp1_adj, respposX1, respposY1, Learning_Loc_Test_rt)
+
+  # Merge learning + recall by object ID
+  merged <- merge(Learning, Recall, by = "obj1", all.y = TRUE)
+
+  # Identify participant
+  subject_ID <- unique(Recall$participant)[1]
+
+  # Lookup AgeGroup + ToD
+  participantRow <- AgeGroup_ToD_Cond %>%
+    filter(participant == subject_ID)
+
+  AgeGroup <- participantRow$AgeGroup[1]
+
+  # Save to YA or OA folder
+  if (AgeGroup == "YA") {
+    write.csv(
+      merged,
+      file = file.path(Learn_recall_YA, paste0(subject_ID, "_Learning_Recall.csv")),
+      row.names = FALSE
+    )
+  } else {
+    write.csv(
+      merged,
+      file = file.path(Learn_recall_OA, paste0(subject_ID, "_Learning_Recall.csv")),
+      row.names = FALSE
+    )
+  }
+
+  # Save general version
+  write.csv(
+    merged,
+    file = file.path(Clean_Data_Dir, "Learning_Recall", paste0(subject_ID, "_Learning_Recall.csv")),
+    row.names = FALSE
+  )
+}
+```
+
+
+

@@ -1,0 +1,1285 @@
+---
+title: "HierarchicalModelling_Analysis"
+author: "Julia Maybury"
+date: "2026-03-05"
+output: html_document
+---
+
+```{r important libraries/packages, include=FALSE}
+
+
+# Clear environment
+rm(list = ls())
+
+# knitr defaults
+knitr::opts_chunk$set(echo = TRUE)
+
+# function that installs packages if they are missing
+load_package<- function(pkg){
+  if (!require(pkg, character.only = TRUE)) {
+    install.packages(pkg)
+    library(pkg, character.only = TRUE)
+  }
+}
+# tidyverse + data handling packages
+load_package("tidyverse")
+load_package("data.table")
+load_package("readxl")
+load_package("reshape2")
+load_package("lattice")
+
+# Plotting & visualisation packages
+load_package("ggpubr")
+load_package("patchwork")
+load_package("bayesplot")
+
+# Bayesian modelling packages
+load_package("rstan")
+load_package("brms")
+load_package("tidybayes")
+load_package("circular")
+load_package("bmm")
+load_package("bayestestR")
+
+# Recommended Stan settings
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+
+```
+
+```{r update directories based on where folders are located, echo=FALSE}
+
+#directory configuration change base_path to path where folders are located with respective data
+
+base_path<-"C:/Users/julia/OneDrive/Desktop" #change location as needed
+
+ToD_Video_NonVideo_Dir<- file.path(base_path, "ToD_Video_NonVideo_Data") #locally where trial by trial data is stored if running modelling on computer
+
+HPCdata_path<-"~/rds/hpc-work/TimeofDayExpFormat"#trail by trial data stored on HPC and models run here using this path
+  
+savemodel_output_path<- file.path(HPCdata_path,"Results")#models run on HPC saved to this folder
+loadmodel_output_path<-file.path(ToD_Video_NonVideo_Dir, "HModelResults")#after models are run, save them locally and are are loaded back in to view output
+
+Plot_output_path<-file.path(ToD_Video_NonVideo_Dir,"HMPlots")#output local folder for plots
+
+
+
+```
+
+
+```{r Prep processing , echo=FALSE}
+
+####SCRPIT FOLLOWS SIMILAR codeing amethods from "A tutorial for estimating Bayesian hierarchical mixture models for visual working memory tasks: Introducing the Bayesian Measurement Modeling (bmm) package for R"(Frischkorn & Popov 2025): Example2_Loaiza&Souza2018.R
+#https://github.com/GidonFrischkorn/Tutorial-MixtureModel-VWM/blob/main/scripts/bmm_examples/Example2_Loaiza%26Souza2018.R
+
+# Set up parallel sampling of mcmc chains
+
+options(mc.cores =  parallel::detectCores())
+
+cores_to_use <- min(nChains, parallel::detectCores())
+options(mc.cores = cores_to_use)
+
+# specify the number of samples to run for warm up & after warm up
+warmup_samples <-500
+postwarmup_samples <-1700 
+
+# specify the number of chains
+nChains <- 4
+
+# number of chains for debugging
+#nChains <- 1
+
+#' if the number of user defined chains is larger than the number of cores 
+#' on the system than estimate as many chains as there are cores on the system
+if (nChains >  parallel::detectCores()) {
+  nChains <-  parallel::detectCores()
+}
+
+# set brms controls to prevent divergent transitions & improve convergence
+adapt_delta <- .95
+max_treedepth <- 10
+
+```
+
+```{r Load Trial by Trail Memory Data that includes Sleep Data from both Experiment Formats, and Prep Data for modelling, echo=FALSE}
+
+#load in trial by trial data
+ TrialAll<-read.csv(file.path(HPCdata_path,"Memory_Sleep_Demo_Vid_NonVid_FinalData.csv"))
+   
+#ensure factors are correctly coded for modelling
+ TrialAll<-TrialAll%>%
+   mutate(
+  AgeGroup = factor(AgeGroup, levels = c("Young", "Old")),
+    format = factor(format, levels = c("Video", "Non_Video")),
+    ToD_Condition = factor(ToD_Condition, levels = c("Morning", "Night")),
+    SubjectID = factor(SubjectID),
+    MatchCondition = factor(MatchCondition),
+    Chronotype = factor(Chronotype),
+    MedianSplit_MEQ = factor(MedianSplit_MEQ)
+)
+
+```
+
+```{r Model estimation for Model One: Time of Day (ToD) Age, and Format : Prior Sensitivity Analysis, echo=FALSE}
+
+
+####Model One as detailed in the paper examines age group (OA vs YA) by experiment format (Video vs Non-Video) interaction,and time of day (Morning vs Evening) by age (OA vs YA) interaction####
+
+#Sensitivity analysis was conducted using 3 sets of priors as an additional justification for chosen priors
+
+####Specify Model##### Template Code used from" (Frischkorn & Popov 2025): Example2_Loaiza&Souza2018.R
+#https://github.com/GidonFrischkorn/Tutorial-MixtureModel-VWM/blob/main/scripts/bmm_examples/Example2_Loaiza%26Souza2018.R
+
+
+#' First we specify a mixture of von Mises distributions.
+#' The first distribution is the memory distribution and
+#' the second distribution is the guessing
+FormatToD_mixFamily <- mixture(von_mises, von_mises, order =  "none")
+
+#' Then, we set up the formula for the mixture model.
+#' Although, we do not want to estimate the mean of the two von Mises distributions,
+#' we have to initialize the formula to specify the dependent variable.
+#' Using priors (see step 3), we will constrain the means of both von Mises distributions
+#' to zero. Additionally, we will use priors to fix the precision (kappa) of the
+#' second von Mises to be zero (at least practically zero).
+FormatToD_mixFormula <- bf(
+  error ~ 1,
+  # Initializing the dependent variable
+  mu1 ~ 1,
+  mu2 ~ 1,
+  #mean of the second component
+  # estimating fixed intercept & random intercept for kappa of the first von Mises
+  kappa1 ~ 1 + AgeGroup * format + AgeGroup * ToD_Condition + (1 |
+                                                                 SubjectID),
+  kappa2 ~ 1,
+  # estimating fixed intercept & random intercept for the mixing proportion
+  # of the first vonMises (i.e., p_mem)
+  theta1 ~ 1 + AgeGroup * format + AgeGroup * ToD_Condition +  (1 |
+                                                                  SubjectID)  # probability of memory
+)
+filename <- 'fit_FormatToD_brms'
+
+
+####Before running full model which is run on the HPC investigate 3 different priors and how they inform the model####, this was done not on the HPC as only one chain wa run and could be done locally on computer
+
+# WEAK / uninformative priors: model will generate wide prior predictive behavior: we do not expect these results
+priors_weak <-
+  prior(constant(0), class = "Intercept", dpar = "mu1") +
+  prior(constant(0), class = "Intercept", dpar = "mu2") +
+  prior(normal(0, 3), class = "Intercept", dpar = "kappa1") +  # very wide log kappa1: kappa range from 0.002-400 : will produce very sharp or very flat von Mises curve
+  prior(normal(0, 3), class = "b", dpar = "kappa1") +
+  prior(constant(-10), class = "Intercept", dpar = "kappa2") +
+  prior(normal(0, 3), class = "Intercept", dpar = "theta1") + # very wide logit theta1: ranges from 0.0002-0.0998
+  prior(normal(0, 3), class = "b", dpar = "theta1")
+
+# MILD / informative / CURRENT Priors : Weakly regularising priors: reflect memory precision and realistic memory probability that we expect
+priors_mild <-
+  prior(constant(0), class = "Intercept", dpar = "mu1") +
+  prior(constant(0), class = "Intercept", dpar = "mu2") +
+  prior(normal(0, 1), class = "Intercept", dpar = "kappa1") +   # log kappa1 between 0.3 and 10
+  prior(normal(0, 0.5), class = "b", dpar = "kappa1") + #around 2.7
+  prior(constant(-10), class = "Intercept", dpar = "kappa2") +
+  prior(normal(0, 1), class = "Intercept", dpar = "theta1") + #logit theta 0.25-0.75
+  prior(normal(0, 0.3), class = "b", dpar = "theta1")
+
+
+# TIGHT / CONSERVATIVE Priors 
+priors_tight <-
+  prior(constant(0), class = "Intercept", dpar = "mu1") +
+  prior(constant(0), class = "Intercept", dpar = "mu2") +
+  prior(normal(0, 0.5), class = "Intercept", dpar = "kappa1") +  #kappa between 0.6 and 3: discourage extreme precision
+  prior(normal(0, 0.2), class = "b", dpar = "kappa1") +
+  prior(constant(-10), class = "Intercept", dpar = "kappa2") +
+  prior(normal(0, 0.5), class = "Intercept", dpar = "theta1") + # logit theta1 : between 0.38 and 0.62 : discourages extreme guessing or perfect memory
+  prior(normal(0, 0.2), class = "b", dpar = "theta1")
+
+
+#fit the model to the three priors (Weak, Mild, Tight)
+fit_prior_weak <- brm(
+  FormatToD_mixFormula,
+  data = TrialAll,
+  prior = priors_weak,
+  family = FormatToD_mixFamily,
+  sample_prior = "only",
+  chains = 1,
+  iter = 300
+)
+
+fit_prior_mild <- brm(
+  FormatToD_mixFormula,
+  data = TrialAll,
+  prior = priors_mild,
+  family = FormatToD_mixFamily,
+  sample_prior = "only",
+  chains = 1,
+  iter = 300
+)
+
+
+fit_prior_tight <- brm(
+  FormatToD_mixFormula,
+  data = TrialAll,
+  prior = priors_tight,
+  family = FormatToD_mixFamily,
+  sample_prior = "only",
+  chains = 1,
+  iter = 300
+)
+
+#plots to see convergence of the three different priors
+Mild <- pp_check(fit_prior_mild, type = "dens_overlay", bw = 0.3)
+Weak <- pp_check(fit_prior_weak, type = "dens_overlay", bw = 0.3)
+Tight <- pp_check(fit_prior_tight, type = "dens_overlay", bw = 0.3)
+
+joint_plot_Priors <- Weak | Mild | Tight
+joint_plot_Priors
+
+joint_plot_Priors_final <- joint_plot_Priors +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.text = element_text(size = 13, face = "bold"),
+    axis.title = element_text(size = 14, face = "bold"),
+    legend.text = element_text(size = 13, face = "bold"),
+    axis.text.y = element_blank(), 
+    axis.ticks.y = element_blank() 
+  )
+
+
+Weak_Density <- Weak +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.text = element_text(size = 13, face = "bold"),
+    axis.title = element_text(size = 14, face = "bold"),
+    legend.text = element_text(size = 13, face = "bold"),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank()  
+  )
+
+
+Mild_Density <- Mild +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.text = element_text(size = 13, face = "bold"),
+    axis.title = element_text(size = 14, face = "bold"),
+    legend.text = element_text(size = 13, face = "bold"),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+
+
+Tight_Density <- Tight +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.text = element_text(size = 13, face = "bold"),
+    axis.title = element_text(size = 14, face = "bold"),
+    legend.text = element_text(size = 13, face = "bold"),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank()   
+  )
+
+#plot priors to view whcih fits model best
+joint_plot_Priors <-
+  (Weak_Density | Mild_Density | Tight_Density) +
+  plot_layout(heights = c(1))
+
+
+ggsave(file.path(Plot_output_path,"PriorSensitivity.jpeg"), plot = joint_plot_Priors)
+
+
+####Chosen Priors for model were Mild based on visualisation of three priors as described in paper#### 
+
+#Model One and Model Two were run on the HPC: models loaded back in after to view summary output
+
+#Constrain parameters using priors: These are the Mild/current priors
+
+FormatToD_mixPriors <-
+  # Means of von Mises distributions (fixed  0)
+  prior(constant(0), class = "Intercept", dpar = "mu1") +
+  prior(constant(0), class = "Intercept", dpar = "mu2") +
+  
+  # Memory precision
+  prior(normal(0, 0.5), class = "b", dpar = "kappa1") +
+  prior(normal(0, 1), class = "Intercept", dpar = "kappa1") +
+  
+  
+  # Guessing precision ≈ uniform (fixed small positive)
+  prior(constant(-10), class = "Intercept", dpar = "kappa2") + # was 0.01 (TODO)
+  
+  # Mixture probability (p_mem)
+  prior(normal(0, 0.3), class = "b", dpar = "theta1") +
+  prior(normal(0, 1), class = "Intercept", dpar = "theta1")
+#
+
+
+# fit the mixture model for experiment format using brms and best chosen priors based on sensitivity analysis for priors (Mild priors were chosen as best)
+fit_FormatToD_mixModel <- brm(
+  # include model information
+  formula = FormatToD_mixFormula,
+  # specify formula for mixture model
+  data    = TrialAll,
+  # specify data used to estimate the mixture model
+  family  = FormatToD_mixFamily,
+  # call the defined mixture family
+  prior   = FormatToD_mixPriors,
+  # use the used defined priors,
+  
+  # save settings
+  sample_prior = TRUE,
+  save_pars = save_pars(all = TRUE),
+  
+  # add brms settings
+  warmup = warmup_samples,
+  iter = warmup_samples + postwarmup_samples,
+  chains = nChains,
+  cores  = cores_to_use,
+  init = 0,
+  
+  # control commands for the sampler
+  control = list(adapt_delta = adapt_delta, max_treedepth = max_treedepth),
+  
+  # save results to file
+  file = filename,
+  file_refit = "always"
+)
+
+##Note models were run using Cambridge HPC, outputs saved to HPC, but can be seen in HMResults and reloaded back into R to view model results
+
+##HPC model save
+saveRDS(
+  fit_FormatToD_mixModel,
+  file = file.path(savemodel_output_path, "FormatToD_mixModel_final.rds")
+)
+#alternative save location
+# saveRDS(
+#   fit_FormatToD_mixModel,
+#   file = file.path(savemodel_output_path, "fit_Format_ToD_brms.rds")
+#)
+
+
+#save the model summary (doesn't contains draws)
+ToD_Format_model_Summary <- summary(fit_FormatToD_mixModel)
+
+saveRDS(ToD_Format_model_Summary,
+        file = file.path(savemodel_output_path,"Model1_ToDFormat_summary.rds"))
+
+
+```
+
+```{r Model estimation for Model Two: MEQ Score, Age Group, Time of Day, echo=FALSE }
+
+#' First we specify a mixture of von Mises distributions.
+#' The first distribution is the memory distribution and
+#' the second distribution is the guessing
+MEQ_mixFamily <- mixture(von_mises,von_mises, order =  "none")
+
+MEQ_mixFormula<- bf(
+  error ~ 1,
+
+  # Means fixed via priors
+  mu1 ~ 1,
+  mu2 ~ 1,
+
+  # Memory precision
+  kappa1 ~ 1 + AgeGroup*ToD_Condition*MEQ_z +(1 | SubjectID),
+
+  # Guessing precision
+  kappa2 ~ 1,
+
+  # Probability of memory
+  theta1 ~ 1 + AgeGroup*ToD_Condition*MEQ_z  +(1 | SubjectID)
+)
+
+filename <- "fit_MEQ_brms"
+
+
+#Same priors as used above for consistency
+MEQ_mixPriors <-
+
+ prior(constant(0), class = "Intercept", dpar = "mu1") +
+prior(constant(0), class = "Intercept", dpar = "mu2") +
+  prior(normal(0, 0.5), class = "b", dpar = "kappa1")+
+prior(normal(0 , 1), class = "Intercept", dpar = "kappa1")+
+# Guessing precision ≈ uniform (fixed small positive)
+  prior(constant(-10), class = "Intercept", dpar = "kappa2") +
+  prior(normal(0, 0.3), class = "b", dpar = "theta1") +
+  prior(normal(0, 1), class = "Intercept", dpar = "theta1")
+# fit the mixture model for time of day using brms
+fit_MEQ_mixModel<- brm(
+  formula = MEQ_mixFormula,
+  data    = TrialAll,
+  family  = MEQ_mixFamily,
+  prior   = MEQ_mixPriors,
+  
+  sample_prior = TRUE,
+  save_pars = save_pars(all = TRUE),
+  
+  warmup = warmup_samples,
+  iter   = warmup_samples + postwarmup_samples,
+  chains = nChains,
+   cores  = cores_to_use,
+  init = 0, #maybe try without
+  
+  
+  # control commands for the sampler
+  control = list(adapt_delta = adapt_delta, 
+                 max_treedepth = max_treedepth),
+  
+  file = filename,
+  file_refit = "always"
+)
+  ##HPC model save alternative location
+# saveRDS(
+#   fit_MEQ_mixModel,
+#   file = file.path(savemodel_output_path, "fit_MEQ_brms.rds")
+# )
+
+##HPC model save 
+saveRDS(
+  fit_MEQ_mixModel,
+  file = file.path(savemodel_output_path, "TimeofDayMEQ_mixModel_final.rds")
+)
+
+#save the model summary (doesn't contains draws)
+MEQ_model_Summary <- summary(fit_MEQ_mixModel)
+
+saveRDS(MEQ_model_Summary,
+        file = file.path(savemodel_output_path,"Model2_ToDMEQ_summary.rds"))
+
+
+
+```
+
+```{r reload models that were run on HPC to assess model results }
+
+#The code above was run on the HPC and model results were saved which are now loaded back in to view conditional means/ model parameter results 
+
+rm(list = ls())
+gc()
+library(brms)
+library(rstan)   # if  used rstan backen
+# Alternative if cmstanr is used
+#library(cmdstanr) # if  used cmdstan backend
+
+#Load Model One: combined ToD and Format Model contains all draws
+fit_ToD_Format_mixModel <- readRDS(
+  file.path(loadmodel_output_path, "FormatToD_mixModel_final.rds")
+)
+
+ #To view model summary, directories can be changed based on where rds file is located
+summary(fit_ToD_Format_mixModel) # convergence of the MCMC chains was assessed by checking for divergent transitions during sampling and by verifying that R̂ values did not exceed 1.0
+ #to view model summary
+ToD_Format_model_summary <- readRDS(file.path(loadmodel_output_path,"Model1_ToDFormat_summary.rds"))
+
+
+#Load Model Two: MEQ* Time of Day * Age Group 
+fit_MEQ_mixModel <- readRDS(file.path(loadmodel_output_path,"TimeofDayMEQ_mixModel_final.rds"))
+summary(fit_MEQ_mixModel)
+
+#to view model summary
+MEQ_model_summary <- readRDS(file.path(loadmodel_output_path,"Model2_ToDMEQ_summary.rdss"))
+
+```
+
+```{r Model Evaluation for Model One: Age, ToD, Exp Format}
+
+##### Model Fit Check: assessed by visually inspecting posterior predictive plots of error distributions####
+
+ToDExp_Density <- pp_check(
+    fit_ToD_Format_mixModel,
+     type = "dens_overlay",
+     bw = 0.3
+ )
+
+ToDExp_Histogram<-pp_check(fit_ToD_Format_mixModel, type = "hist")
+
+max_val <- max(layer_data(ToDExp_Density, 1)$y, na.rm = TRUE) #expanded to view peak of density plot
+
+final_ToDExp_Density <-
+  ToDExp_Density +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.text = element_text(size = 13, face = "bold"),
+    axis.title = element_text(size = 14, face = "bold"),
+    legend.text = element_text(size = 13, face = "bold"),
+  axis.text.y = element_blank(),   # removes the numbers
+  axis.ticks.y = element_blank()   # removes the tick marks
+  )
+
+# save plots with high resolution
+ggsave(
+  filename = file.path(Plot_output_path), "ExpToD_Density.jpeg",
+  plot = final_ToDExp_Density, width = 6, height = 6
+)
+
+
+
+# save desnity plots
+ggsave(
+  filename = file.path(Plot_output_path),"ExpToD_Histogram.jpeg",
+  plot = ToDExp_Histogram, width = 6, height = 15
+)
+
+
+#Extract posterior draws from model
+draws_ToDExp<- as_draws_df(fit_ToD_Format_mixModel)
+
+
+####This section of code reconstructs the condition specific (age, format, Time of day) posterior values combining intercepts, main effects and interactions for kappa (precision) and theta (memory probability)####
+
+recon_ToDExp<- draws_ToDExp%>%
+  transmute(
+    .draw,
+
+    #kappa: precision
+    kappa_Young_Video_Morning = b_kappa1_Intercept, #intercept=baseline
+    
+    kappa_Young_Video_Night =
+      b_kappa1_Intercept + b_kappa1_ToD_ConditionNight,
+    
+    kappa_Young_Non_Morning =
+      b_kappa1_Intercept + b_kappa1_formatNon_Video,
+    
+    kappa_Young_Non_Night =
+      b_kappa1_Intercept + b_kappa1_formatNon_Video +
+      b_kappa1_ToD_ConditionNight,
+    
+    kappa_Old_Video_Morning =
+      b_kappa1_Intercept + b_kappa1_AgeGroupOld,
+    
+    kappa_Old_Video_Night =
+      b_kappa1_Intercept + b_kappa1_AgeGroupOld +
+      b_kappa1_ToD_ConditionNight +
+      `b_kappa1_AgeGroupOld:ToD_ConditionNight`,
+    
+    kappa_Old_Non_Morning =
+      b_kappa1_Intercept + b_kappa1_AgeGroupOld +
+      b_kappa1_formatNon_Video +
+      `b_kappa1_AgeGroupOld:formatNon_Video`,
+    
+    kappa_Old_Non_Night =
+      b_kappa1_Intercept + b_kappa1_AgeGroupOld +
+      b_kappa1_formatNon_Video +
+      b_kappa1_ToD_ConditionNight +
+      `b_kappa1_AgeGroupOld:formatNon_Video` +
+      `b_kappa1_AgeGroupOld:ToD_ConditionNight`,
+  
+# theta: memory probability
+theta_Young_Video_Morning = b_theta1_Intercept,
+
+theta_Young_Video_Night =
+  b_theta1_Intercept + b_theta1_ToD_ConditionNight,
+
+theta_Young_Non_Morning =
+  b_theta1_Intercept + b_theta1_formatNon_Video,
+
+theta_Young_Non_Night =
+  b_theta1_Intercept + b_theta1_formatNon_Video +
+  b_theta1_ToD_ConditionNight,
+
+theta_Old_Video_Morning =
+  b_theta1_Intercept + b_theta1_AgeGroupOld,
+
+theta_Old_Video_Night =
+  b_theta1_Intercept + b_theta1_AgeGroupOld +
+  b_theta1_ToD_ConditionNight +
+  `b_theta1_AgeGroupOld:ToD_ConditionNight`,
+
+theta_Old_Non_Morning =
+  b_theta1_Intercept + b_theta1_AgeGroupOld +
+  b_theta1_formatNon_Video +
+  `b_theta1_AgeGroupOld:formatNon_Video`,
+
+theta_Old_Non_Night =
+  b_theta1_Intercept + b_theta1_AgeGroupOld +
+  b_theta1_formatNon_Video +
+  b_theta1_ToD_ConditionNight +
+  `b_theta1_AgeGroupOld:formatNon_Video` +
+  `b_theta1_AgeGroupOld:ToD_ConditionNight`
+)
+
+
+#Convert wide posterior draws into long format, convert to factors and relabel when needed
+plot_ToDExp<- recon_ToDExp%>%
+  pivot_longer(-.draw, names_to = "cond", values_to = "postSample") %>%
+  mutate(
+    par = ifelse(str_detect(cond, "kappa"), "kappa1", "theta1"),
+    AgeGroup = ifelse(str_detect(cond, "Old"), "Old", "Young"),
+    format = ifelse(str_detect(cond, "_Non"), "Non-Video", "Video"),
+    ToD = ifelse(str_detect(cond, "Night"), "Evening", "Morning"),
+    AgeGroup = factor(AgeGroup, levels = c("Young", "Old")),
+    ToD = factor(ToD, levels = c("Morning", "Evening")),
+    format = factor(format, levels = c("Non-Video", "Video"))   
+  )
+
+
+####Convert posterior estimates that were obtained on transformed scale (log for kappa and logit for theta)####
+
+plot_ToDExp <- plot_ToDExp %>%
+  mutate(
+    postSample_abs = case_when(
+      #k is on log scale so exp()
+      # Further transformed into circular standard deviation of the von Mises distribution (degrees)
+      par == "kappa1" ~ bmm::k2sd(exp(postSample)) * 180 / pi, 
+       # theta on logit scale so convert to probability of memory based responding
+      par == "theta1" ~ inv_logit_scaled(postSample)
+    )
+  )
+
+####Plotting Model One####
+
+#Set column colors for plotting
+cols <- c(
+  "Morning" = "#E69F00",  # orange
+  "Evening"   = "#0072B2"   # blue
+)
+
+
+####Point and CI Plot
+
+kappa_points <- ggplot(
+  plot_ToDExp %>% filter(par == "kappa1"),
+  aes(x = format, y = postSample_abs, color = ToD)
+) +
+  facet_grid(. ~ AgeGroup) +
+
+  # Median points
+  stat_summary(
+    aes(group = interaction(format, ToD)),
+    position = pd,
+    fun = median,
+    geom = "point",
+    size = 3
+  ) +
+
+  # 95% HDI interval
+  stat_summary(
+    aes(group = interaction(format, ToD)),
+    position = pd,
+    fun.data = median_hdi,
+    geom = "errorbar",
+    width = 0.2,
+    linewidth = 1
+  ) +
+
+  scale_y_continuous(
+    limits = c(5, 25),
+    breaks = seq(5, 25, 3)
+  ) +
+
+  scale_color_manual(values = cols) +
+
+  labs(
+    x = "Experiment Format",
+    y = "Memory Imprecision (SD, degrees)",
+    color = "Time of Day",
+    title = "A"
+  ) +
+
+  theme_classic(base_size = 14) +
+  theme(
+    legend.text = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 12, face = "bold"),
+    axis.title = element_text(size = 14, face = "bold"),
+    plot.title = element_text(size = 16, face = "bold"),
+    strip.text = element_text(size = 14, face = "bold")
+  )+
+  scale_x_discrete(labels = c(
+    "Non-Video" = "Non-\nVideo",
+    "Video" = "Video"))
+
+pMem_points <- ggplot(
+  plot_ToDExp %>% filter(par == "theta1"),
+  aes(x = format, y = postSample_abs, color = ToD)
+) +
+  facet_grid(. ~ AgeGroup) +
+
+  # Median points
+  stat_summary(
+    aes(group = interaction(format, ToD)),
+    position = pd,
+    fun = median,
+    geom = "point",
+    size = 3
+  ) +
+
+  # 95% credible intervals
+  stat_summary(
+    aes(group = interaction(format, ToD)),
+    position = pd,
+    fun.data = median_hdi,
+    geom = "errorbar",
+    width = 0.2,
+    linewidth = 1
+  ) +
+
+  scale_y_continuous(
+    limits = c(0, 1),
+    breaks = seq(0, 1, by = 0.1)
+  ) +
+
+  scale_color_manual(values = cols) +
+
+  labs(
+    x = "Experiment Format",
+    y = expression(bold(P[mem])),
+    color = "Time of Day",
+    title = "B"
+  ) +
+
+  theme_classic(base_size = 14) +
+  theme(
+    legend.text = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 12, face = "bold"),
+    axis.title = element_text(size = 14, face = "bold"),
+    plot.title = element_text(size = 16, face = "bold"),
+    strip.text = element_text(size = 14, face = "bold")
+  )+
+  scale_x_discrete(labels = c(
+    "Non-Video" = "Non-\nVideo",
+    "Video" = "Video"))
+
+#Combined kappa and theta plot
+
+library(patchwork)
+
+joint_points_plot <- (kappa_points+pMem_points) +
+  plot_layout(guides = "collect") &
+  theme(
+    legend.position = "bottom",
+    legend.title = element_text(face = "bold")
+    #legend.title = element_blank()
+  )&
+  scale_color_manual(
+    name = "Time of Day",
+    values = cols
+  ) &
+  scale_fill_manual(
+    name = "Time of Day",
+    values = cols
+  ) 
+
+joint_points_plot
+
+#save joint figure  
+ggsave(
+  filename = file.path(Plot_output_path,"ToDExp_points_CI.jpeg"),
+  plot = joint_points_plot,
+  width = 6.5,
+  height = 6,
+  dpi = 300
+)
+
+#figure save with specific dimensions for paper
+ggsave(
+  filename = file.path(Plot_output_path,"ToDExp_points_CI.tif"),
+  plot = joint_points_plot,
+  width = 6,
+  height = 10,
+  dpi = 300,
+  device = "tiff",        # TIFF format
+  units = "in",           # set units to inches
+  compression = "lzw"     # Enforce LZW compression
+)
+
+```
+
+```{r Model Evaluation for Model Two: MEQ*Age*ToD }
+
+####Model Checks: Posterior predictive check####
+
+#View how well the model fit the data by looking at MEQ Density plots
+#This shows whether your mixture model actually reproduces the observed circular error distribution
+
+MEQ_Density <- pp_check(fit_MEQ_mixModel, type = "dens_overlay", bw = 0.3)
+
+MEQ_Density_final <- MEQ_Density +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.text = element_text(size = 13, face = "bold"),
+    axis.title = element_text(size = 14, face = "bold"),
+    legend.text = element_text(size = 13, face = "bold"),
+    axis.text.y = element_blank(),
+    # removes the numbers
+    axis.ticks.y = element_blank()   # removes the tick marks
+  )
+
+
+MEQHist <- pp_check(fit_MEQ_mixModel, type = "hist") #can also view histogram version of posterior predictive check
+
+# save Density plot
+ggsave(
+  filename = file.path(Plot_output_path,"MEQ_Density.jpeg"),
+  plot = MEQ_Density_final,
+  width = 6,
+  height = 6
+)
+
+# save Histogram plot
+ggsave(
+  filename = file.path(Plot_output_path,"MEQHist.jpeg"),
+  plot = MEQHist,
+  width = 6,
+  height = 6
+)
+
+####PLOTTING MODEL 2:Conditional Effects####
+
+# First examine conditional effect but these average over other predictors so better to use fitted () for plots allowing for greater control over parameters
+#Conditional effects really designed for 1-2 predictors and since we are looking at 3 way interaction  MEQxToDxAge it is better to to use fitted function
+
+#Conditional effects: this is averaging over other predictors, computes predicted values internally
+ce_kappa <- conditional_effects(
+  fit_MEQ_mixModel,
+  effects = "MEQ_z:ToD_Condition",
+  conditions = data.frame(AgeGroup = c("Young", "Old")),
+  dpar = "kappa1"
+)
+
+plot(ce_kappa)
+ce_theta <- conditional_effects(
+  fit_MEQ_mixModel,
+  effects = "MEQ_z:ToD_Condition",
+  conditions = data.frame(AgeGroup = c("Young", "Old")),
+  dpar = "theta1"
+)
+
+plot(ce_theta)
+
+
+####PLOTTING MODEL 2: Fitted Values for Full 3 way Interaction( MEQ*AGE*TOD) ####
+
+#use fitted for the three way interactions: generates predictions for any input of values, returns posterior mean and credible intervals: brms computes posterior predictions, calculates  the posterior mean (Estimate) and the 95% credible intervals
+
+# First create grid of predictor values across MEQ, age group, and time of day
+
+MEQData <- expand.grid(
+  MEQ_z = seq(-2.5, 2.5, length.out = 100),
+  AgeGroup = c("Young", "Old"),
+  ToD_Condition = c("Morning", "Night")
+)
+
+MEQData$ToD_Condition <- factor(MEQData$ToD_Condition, levels = c("Morning", "Night"))
+
+#Extract posterior linear predictor for kappa (log scale)
+kappa_draws <- posterior_linpred(
+  fit_MEQ_mixModel,
+  newdata = MEQData ,
+  dpar = "kappa1",
+  re_formula = NA
+)
+
+#convert to long dataframe
+kappa_df <- as.data.frame(kappa_draws) %>%
+  mutate(.draw = row_number()) %>%
+  pivot_longer(-.draw, names_to = "obs", values_to = "postSample") %>%
+  mutate(obs = as.numeric(gsub("V", "", obs))) %>%
+  left_join(MEQData %>% mutate(obs = row_number()), by = "obs")
+
+#convert log(kappa) to kappa SD (degrees)
+kappa_df <- kappa_df %>%
+  mutate(
+    kappa = exp(postSample),
+    #convert from log scale
+    sd_deg = k2sd(kappa) * 180 / pi #convert SD from radians to degrees
+  )
+
+#summarise posterior median and 95% credible intervals
+kappa_summary <- kappa_df %>%
+  arrange(AgeGroup, ToD_Condition, MEQ_z) %>%
+  group_by(MEQ_z, AgeGroup, ToD_Condition) %>%
+  median_qi(sd_deg) %>%
+  mutate(ToD_Condition = recode(ToD_Condition, "Night" = "Evening"))
+
+
+#Set colors for plotting
+cols <- c(
+  "Morning" = "#E69F00",
+  # orange
+  "Evening"   = "#0072B2"   # blue
+)
+
+#plot kappa precision
+p_kappa <- ggplot(
+  kappa_summary,
+  aes(
+    x = MEQ_z,
+    y = sd_deg,
+    color = ToD_Condition,
+    fill = ToD_Condition,
+    group = ToD_Condition
+  )
+) +
+  geom_line(linewidth = 1.2) +
+  geom_ribbon(aes(ymin = .lower, ymax = .upper),
+              alpha = 0.15,
+              color = NA) +
+  facet_wrap( ~ AgeGroup) +
+  theme_classic(base_size = 14) +
+  labs(x = "MEQ (z-scored)", y = "Memory Imprecision (SD, degrees)", title = "A") +
+  scale_color_manual(values = cols) +
+  scale_fill_manual(values = cols) +
+  theme(
+    legend.text = element_text(size = 12, face = "bold"),
+    legend.title = element_text(size = 13, face = "bold"),
+    axis.text = element_text(size = 12, face = "bold"),
+    axis.title = element_text(size = 14, face = "bold"),
+    plot.title = element_text(size = 16, face = "bold"),
+    # Centered title
+    strip.text = element_text(size = 14, face = "bold")
+  )
+
+#extract posterior draws for theta (logit scale)
+theta_draws <- posterior_linpred(
+  fit_MEQ_mixModel,
+  newdata = MEQData,
+  dpar = "theta1",
+  re_formula = NA
+)
+theta_df <- as.data.frame(theta_draws) %>%
+  mutate(.draw = row_number()) %>%
+  pivot_longer(-.draw, names_to = "obs", values_to = "postSample") %>%
+  mutate(obs = as.numeric(gsub("V", "", obs))) %>%
+  left_join(MEQData %>% mutate(obs = row_number()), by = "obs")
+
+#convert logit (theta) to probability
+theta_df <- theta_df %>%
+  mutate(pmem = inv_logit_scaled(postSample))
+
+theta_summary <- theta_df %>%
+  arrange(AgeGroup, ToD_Condition, MEQ_z) %>%
+  group_by(MEQ_z, AgeGroup, ToD_Condition) %>%
+  median_qi(pmem) %>%
+  mutate(ToD_Condition = recode(ToD_Condition, "Night" = "Evening"))
+#plot theta (mem probability)
+p_theta <- ggplot(
+  theta_summary,
+  aes(
+    x = MEQ_z,
+    y = pmem,
+    color = ToD_Condition,
+    fill = ToD_Condition,
+    group = ToD_Condition
+  )
+) +
+  geom_line(linewidth = 1.2) +
+  geom_ribbon(aes(ymin = .lower, ymax = .upper),
+              alpha = 0.15,
+              color = NA) +
+  facet_wrap( ~ AgeGroup) +
+  theme_classic(base_size = 14) +
+  labs(x = "MEQ (z-scored)",
+       y = expression(bold(P[mem])),
+       title = "B") +
+  theme(
+    legend.text = element_text(size = 12, face = "bold"),
+    legend.title = element_text(size = 13, face = "bold"),
+    axis.text = element_text(size = 12, face = "bold"),
+    axis.title = element_text(size = 14, face = "bold"),
+    plot.title = element_text(size = 16, face = "bold"),
+    # Centered title
+    strip.text = element_text(size = 14, face = "bold")
+  ) +
+  
+  scale_color_manual(name = "Time of Day", values = cols) +
+  scale_fill_manual(name = "Time of Day", values = cols)
+
+
+#create a joint plot for kappa and theta
+joint_plot_MEQ <- (p_kappa + p_theta) +
+  plot_layout(guides = "collect") &
+  scale_color_manual(name = "Time of Day", values = cols) &
+  scale_fill_manual(name = "Time of Day", values = cols) &
+  theme(legend.position = "right",
+        legend.title = element_text(size = 13, face = "bold"))
+
+joint_plot_MEQ
+
+
+# save MEQ Plot
+ggsave(
+  filename = file.path(Plot_output_path,"joint_plot_MEQ.jpeg"),
+  plot = joint_plot_MEQ,
+  width = 7.5,
+  height = 4,
+  dpi = 400
+  
+)
+
+# save MEQ Plot with specifications for journal
+ggsave(
+  filename = file.path(Plot_output_path,"joint_plot_MEQ.tif"),
+  plot = joint_plot_MEQ,
+  width = 7.5,
+  height = 4,
+  device = "tiff",
+  # Force TIFF format
+  units = "in",
+  # Explicitly set units to inches
+  dpi = 400,
+  # Enforce 300 DPI
+  compression = "lzw"     # Enforce LZW compression to keep file size < 10MB
+  
+)
+
+```
+
+```{r Supplementary Analysis: Sample Size, echo=FALSE}
+
+####Sample Size Supplementary Analysis###
+
+# Verify whether N = 232 participants is sufficient for stable estimation of key hierarchical mixture model parameters.
+#
+# Approach (van Doorn et al., 2021):
+# 1. Fit the same model to subsets of the data (N = 50, 100, 150, 200, 232)
+# 2. Examine:
+#    - ROPE overlap (practical equivalence)
+#    - Posterior SD (uncertainty shrinkage)
+# 3. Assess whether parameter estimates stabilise as N increases.
+
+# Note: models run on HPC for each sample size and output for each model is loaded back in#
+
+#inspect cell counts for age by format by time of day
+table(TrialAll$AgeGroup, TrialAll$format, TrialAll$ToD_Condition)
+#count unique participants per experimental cell
+participants_per_cell <- TrialAll %>%
+  distinct(SubjectID, AgeGroup, format, ToD_Condition) %>%
+  count(AgeGroup, format, ToD_Condition)
+
+participants_per_cell
+
+#count number of trials per participant
+trials_per_subject <- TrialAll %>%
+  count(SubjectID, AgeGroup, format, ToD_Condition)
+
+head(trials_per_subject)
+
+
+#Function to randomly sample participants
+
+# This ensures each subset contains *all trials* from the sampled participants.
+set.seed(123)
+
+subsample_participants <- function(data, n_subj) {
+  # sample SubjectIDs
+  sampled_ids <- data %>%
+    distinct(SubjectID) %>%
+    slice_sample(n = n_subj) %>%
+    pull(SubjectID)
+  
+  # keep all trials for those participants
+  data %>% filter(SubjectID %in% sampled_ids)
+}
+
+#example subsample 100 participants
+subs <- subsample_participants(TrialAll, 100)
+
+#create subsets for each sample size
+Ns <- c(50, 100, 150, 200, 232)
+
+subsets <- lapply(Ns, function(n_subj) {
+  subsample_participants(TrialAll, n_subj)
+})
+names(subsets) <- paste0("N", Ns)
+
+#fir the model to each subset
+#update reuses compiled stan model for faster execution
+fits <- lapply(subsets, function(dat) {
+  update(fit_FormatToD_mixModel,
+         newdata = dat,
+         recompile = FALSE)
+})
+
+#save each model fit
+for (name in names(fits)) {
+  saveRDS(fits[[name]], paste0("fit_", name, ".rds"))
+}
+
+for (name in names(fits)) {
+  saveRDS(
+    fits[[name]],
+    file = file.path(savemodel_output_path, paste0("FormatToD_mixModel_", name, ".rds"))
+  )
+}
+
+
+savemodel_output_path
+#Load in fitted model for each sample size (HPC output)
+
+#reload experiment format model
+ExpTod_50 <- readRDS(
+  file.path(loadmodel_output_path, "FormatToD_mixModel_N50.rds")
+)
+
+summary(ExpTod_50)
+
+
+#reload experiment format model
+ExpTod_100 <- - readRDS(
+  file.path(loadmodel_output_path,"FormatToD_mixModel_N100.rds")
+)
+summary(ExpTod_100)
+
+#reload experiment format model
+ExpTod_150 <- - readRDS(
+  file.path(loadmodel_output_path, "FormatToD_mixModel_N150.rds")
+)
+summary(ExpTod_150)
+
+#reload experiment format model
+ExpTod_200 <-- readRDS(
+  file.path(loadmodel_output_path, "FormatToD_mixModel_N200.rds")
+)
+summary(ExpTod_200)
+
+#reload experiment format model
+ExpTod_232 <- - readRDS(
+  file.path(loadmodel_output_path,"FormatToD_mixModel_N232.rds")
+)
+summary(ExpTod_232)
+
+
+fits <- list(
+  N50  = ExpTod_50,
+  N100 = ExpTod_100,
+  N150 = ExpTod_150,
+  N200 = ExpTod_200,
+  N232 = ExpTod_232
+)
+
+#parameters of interest: age, format, time of day interactions
+params <- c(
+  # Format effects
+  "b_kappa1_formatNon_Video",
+  "b_kappa1_AgeGroupOld:formatNon_Video",
+  "b_theta1_formatNon_Video",
+  "b_theta1_AgeGroupOld:formatNon_Video",
+  
+  # ToD effects
+  "b_kappa1_ToD_ConditionNight",
+  "b_kappa1_AgeGroupOld:ToD_ConditionNight",
+  "b_theta1_ToD_ConditionNight",
+  "b_theta1_AgeGroupOld:ToD_ConditionNight"
+)
+
+
+#ROPE analysis of sample size (practical equivalence()
+#ROPE on link scale
+rope_lower <- -0.1
+rope_upper <-  0.1
+
+library(posterior)
+library(dplyr)
+
+rope_overlap <- function(fit, param, rope_lower, rope_upper) {
+  draws <- as_draws_df(fit)[[param]]
+  mean(draws > rope_lower & draws < rope_upper)
+}
+
+#compute ROPE overlap for each parameter and sample size
+rope_results <- bind_rows(lapply(names(fits), function(N) {
+  bind_rows(lapply(params, function(p) {
+    data.frame(
+      N = N,
+      parameter = p,
+      rope = rope_overlap(fits[[N]], p, rope_lower, rope_upper)
+    )
+  }))
+}))
+rope_results$N_num <- as.numeric(gsub("N", "", rope_results$N))
+
+
+#Posterior SD vs sample size analysis
+sd_df <- bind_rows(lapply(names(fits), function(N) {
+  bind_rows(lapply(params, function(p) {
+    s <- posterior_summary(fits[[N]], variable = p)
+    data.frame(N = as.numeric(gsub("N", "", N)),
+               parameter = p,
+               sd = s[2])
+  }))
+}))
+
+sd_df$N_num <- as.numeric(gsub("N", "", sd_df$N))
+
+#Plot ROPE overlap vs Sample size
+Rope <- ggplot(rope_results, aes(x = N_num, y = rope, color = parameter)) +
+  geom_line() +
+  geom_point() +
+  theme_bw() +
+  labs(title = "ROPE overlap vs sample size", x = "Sample size (N)", y = "Proportion of posterior inside ROPE")
+
+#plot posterior SD vs sample size
+PosteriorSD_SampleSize <- ggplot(sd_df, aes(x = N_num, y = sd, color = parameter)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  theme_bw(base_size = 14) +
+  labs(
+    #title = "Posterior SD vs Sample Size",
+    x = "Sample Size (N)",
+    y = "Posterior Standard Deviation",
+    color = "Parameter"
+  ) +
+  scale_x_continuous(breaks = c(50, 100, 150, 200, 232)) +
+  guides(color = guide_legend(ncol = 1)) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    axis.title = element_text(size = 14, face = "bold"),
+    legend.title = element_text(size = 13, face = "bold"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom",
+    legend.box = "vertical"
+  )
+
+#save plot
+ggsave(
+  filename = file.path(Plot_output_path,"PosteriorSD_SampleSize.jpeg"),
+  plot = PosteriorSD_SampleSize,
+  width = 5.5,
+  height = 6.5
+)
+#save plot with publication specifications
+ggsave(
+  filename = file.path(Plot_output_path,"PosteriorSD_SampleSize.tif"),
+  plot = PosteriorSD_SampleSize,
+  width = 5.5,
+  height = 6.5,
+  dpi = 400,
+  device = "tiff",
+  # Force TIFF format
+  units = "in",
+  # Explicitly set units to inches
+  compression = "lzw"     # Enforce LZW compression to keep file size < 10MB
+)
+
+#Parameter-wise SD plots (van Doorn style)
+#another way to view Posterior SD vs sample size: each parameter separately
+
+library(ggplot2)
+library(dplyr)
+
+# Ensure numeric N
+sd_df$N_num <- as.numeric(gsub("N", "", sd_df$N))
+
+# Clean parameter labels
+sd_df$parameter <- factor(sd_df$parameter)
+
+Parameter_SD <- ggplot(sd_df, aes(x = N_num, y = sd, color = parameter)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  facet_wrap( ~ parameter, scales = "free_y", ncol = 2) +
+  theme_classic(base_size = 14) +
+  labs(title = "Posterior SD vs Sample Size", x = "Sample Size (N)", y = "Posterior Standard Deviation") +
+  scale_x_continuous(breaks = c(50, 100, 150, 200, 232)) +
+  scale_color_brewer(palette = "Dark2") +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    axis.title = element_text(face = "bold"),
+    strip.text = element_text(face = "bold", size = 12),
+    legend.position = "none"
+  )
+
+Parmaeter_SD
+
+
+```
+

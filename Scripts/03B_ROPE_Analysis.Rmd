@@ -1,0 +1,416 @@
+---
+title: "ROPE Analysis"
+output: html_document
+date: "2026-06-06"
+---
+
+```{r load in important libraries , include=FALSE}
+
+# Clear environment
+rm(list = ls())
+
+# knitr defaults
+knitr::opts_chunk$set(echo = TRUE)
+
+# function that installs packages if they are missing
+load_package<- function(pkg){
+  if (!require(pkg, character.only = TRUE)) {
+    install.packages(pkg)
+    library(pkg, character.only = TRUE)
+  }
+}
+
+
+load_package("tidyverse")
+load_package("data.table")
+load_package("readxl")
+load_package("reshape2")
+load_package("lattice")
+load_package("purrr")
+load_package("ggpubr")
+load_package("patchwork")
+load_package("bayesplot")
+load_package("ggplot2")
+
+# Bayesian modelling packages
+load_package("brms")
+load_package("posterior")
+load_package("bayestestR")
+
+
+
+```
+
+```{r update directories based on where folders are located, echo=FALSE}
+
+#directory configuration change base_path as needed for where folders are located 
+
+
+base_path<-"C:/Users/julia/OneDrive/Desktop" #change location as needed
+
+ToD_Video_NonVideo_Dir<- file.path(base_path, "ToD_Video_NonVideo_Data") #locally where trial by trial data is stored if running modelling on computer
+
+HPCdata_path<-"~/rds/hpc-work/TimeofDayExpFormat" #trail by trial data stored on HPC and models run here using this path
+savemodel_output_path<- file.path(HPCdata_path,"Results") #models run on HPC saved to this folder
+loadmodel_output_path<-file.path(ToD_Video_NonVideo_Dir, "HMResults") #after models are run, save them locally and are are loaded back in to view output
+
+Plot_output_path<-file.path(ToD_Video_NonVideo_Dir,"HMPlots") #output local folder for plots
+
+
+```
+
+
+```{r ROPE analysis, echo=FALSE}
+
+
+####ROPE + HDI DECISION RULE ANALYSIS####
+
+# Evaluate the strength of evidence for key interaction parameters
+# (Age × Time of Day, Age × Format) using:
+#   ROPE (Region of Practical Equivalence)
+#   HDI (Highest Density Interval)
+#   Directional posterior probabilities
+#
+# This script follows method of Kruschke (2018) and Kruschke & Liddell (2018).
+
+#Note ROPE analysis was run on the HPC so model output were loaded back in via HPC directory, can also be run locally, just change path /directory for where model output path is
+
+#Model one: Time of day, age, format
+# Load fitted hierarchical model
+
+fit_FormatToD_mixModel <- readRDS(
+  file.path(savemodel_output_path, "FormatToD_mixModel_final.rds"))
+
+# Extract posterior draws into a dataframe
+post_ToDExp_draws <- as_draws_df(fit_FormatToD_mixModel)
+
+# Define ROPEs (Justifcation for ROPES detailed in manuscript) for kappa and theta
+#these reflect smallest effect sizes considered piratically meaningful
+delta_kappa <- 0.10
+rope_kappa  <- c(-delta_kappa, delta_kappa)
+
+delta_theta <- 0.35
+rope_theta  <- c(-delta_theta, delta_theta)
+
+# Parameters of interest: Age and Time of Day interaction and Age and Experiment Format Interaction terms for theta and kappa
+params <- list(
+  theta_tod = list(par = "b_theta1_AgeGroupOld:ToD_ConditionNight", rope = rope_theta),
+  theta_format = list(par = "b_theta1_AgeGroupOld:formatNon_Video", rope = rope_theta),
+  kappa_tod = list(par = "b_kappa1_AgeGroupOld:ToD_ConditionNight", rope = rope_kappa),
+  kappa_format = list(par = "b_kappa1_AgeGroupOld:formatNon_Video", rope = rope_kappa)
+)
+
+#build a function that summarises posterior evidence for each parameter
+summarise_parameter <- function(draws, rope, ci = 0.95) {
+  #Calculate Highest Density Interval
+  h <- bayestestR::hdi(draws, ci = ci)
+  
+  data.frame(
+    posterior_mean = mean(draws),
+    #HDI bounds
+    hdi_low  = h$CI_low,
+    hdi_high = h$CI_high,
+    
+    #Directional Probabilities
+    p_positive = mean(draws > 0),
+    p_negative = mean(draws < 0),
+    
+    # Evidence relative to ROPE boundaries
+    p_rope         = mean(draws >= rope[1] & draws <= rope[2]),
+    p_meaningful   = mean(draws < rope[1] | draws > rope[2]),
+    #ROPE bounds
+    rope_low       = rope[1],
+    rope_high      = rope[2]
+  )
+}
+#loop across parameters and compute ROPE and HDI summaries
+ROPE_results <- bind_rows(lapply(names(params), function(nm) {
+  par_name <- params[[nm]]$par
+  rope_val <- params[[nm]]$rope
+  
+  draws <- post_ToDExp_draws[[par_name]] #extract draws for parameter
+  
+  out <- summarise_parameter(draws = draws, rope = rope_val)
+  
+  out$parameter <- nm
+  
+  out
+})) %>%
+  #  Apply HDI-ROPE Decision rule (Kruschke, 2018). See paper for more details on accepting, rejecting null
+  mutate(
+    decision = case_when(
+      # Rule 1: HDI is fully inside ROPE -> Practical equivalence
+      hdi_low >= rope_low & hdi_high <= rope_high ~ "Accept Null",
+      
+      # Rule 2: HDI is fully outside ROPE -> Meaningful effect
+      hdi_high < rope_low | hdi_low > rope_high ~ "Reject Null",
+      
+      # Rule 3: HDI and ROPE overlaps -> Insufficient data to decide/inconclusive
+      TRUE ~ "Undecided"
+    )
+  ) %>%
+  select(
+    parameter,
+    posterior_mean,
+    hdi_low,
+    hdi_high,
+    p_positive,
+    p_negative,
+    p_meaningful,
+    p_rope,
+    rope_low,
+    rope_high,
+    decision
+  )
+
+#view  rope results to see decision
+print(ROPE_results)
+
+
+#save ROPE summary results csv and rds
+write.csv(
+  ROPE_results,
+  file = file.path(savemodel_output_path, "posterior_ROPE_summary.csv"),
+  row.names = FALSE
+)
+
+saveRDS(
+  ROPE_results, file=file.path(savemodel_output_path, "posterior_ROPE_summary.rds")
+)
+
+```
+
+
+```{r Plotting ROPE + HDI Posterior, echo=FALSE}
+
+
+#visualise posterior distributions for interaction parameters: summary of Bayesian evidence
+# (Age × Time-of-Day, Age × Format)
+#   ROPE shading (Region of Practical Equivalence)
+#   95% HDI (Highest Density Interval)
+#   Posterior mean
+#
+
+#Define parameters and ROPEs
+
+params <- list(
+  theta_tod = list(
+    name = "b_theta1_AgeGroupOld:ToD_ConditionNight",
+    rope = c(-0.35, 0.35),
+    label = "A: Memory Probability (θ₁)\nAge × Time-of-Day "
+  ),
+  theta_format = list(
+    name = "b_theta1_AgeGroupOld:formatNon_Video",
+    rope = c(-0.35, 0.35),
+    label = "B: Memory Probability (θ₁)\nAge × Format "
+  ),
+  kappa_tod = list(
+    name = "b_kappa1_AgeGroupOld:ToD_ConditionNight",
+    rope = c(-0.10, 0.10),
+    label = "C: Precision (κ₁)\nAge × Time-of-Day"
+  ),
+  kappa_format = list(
+    name = "b_kappa1_AgeGroupOld:formatNon_Video",
+    rope = c(-0.10, 0.10),
+    label = "D: Precision (κ₁)\nAge × Format"
+  )
+)
+
+# Create Posterior dataframe with HDIs
+
+posterior_df <- map_df(names(params), function(p) {
+  par_info <- params[[p]]
+  draws <- post_ToDExp_draws[[par_info$name]]
+  
+  h <- hdi(draws, ci = 0.95)
+  
+  tibble(
+    parameter = par_info$label,
+    value = draws,
+    rope_low = par_info$rope[1],
+    rope_high = par_info$rope[2],
+    hdi_low = h$CI_low,
+    hdi_high = h$CI_high,
+    mean = mean(draws)
+  )
+})
+
+# Create row-by-row layout sorting
+posterior_df$parameter <- factor(posterior_df$parameter, levels = map_chr(params, ~ .x$label))
+
+# Plot: posterior density + HDI + ROPE
+
+ROPEHDI <- ggplot(posterior_df, aes(x = value)) +
+  # ROPE shading
+  geom_rect(
+    aes(
+      xmin = rope_low,
+      xmax = rope_high,
+      ymin = 0,
+      ymax = Inf,
+      fill = "ROPE\n(Region of Practical Equivalence)"
+    ),
+    alpha = 0.15
+  ) +
+  # posterior density curve
+  geom_density(fill = "skyblue",
+               alpha = 0.4,
+               colour = "skyblue4") +
+  # HDI line at y = 0
+  geom_segment(
+    aes(
+      x = hdi_low,
+      xend = hdi_high,
+      y = 0,
+      yend = 0,
+      colour = "95% HDI\n(Highest Density Interval)"
+    ),
+    size = 1.5
+  ) +
+  # Posterior mean (dashed verticle line)
+  geom_vline(aes(xintercept = mean),
+             colour = "blue",
+             linetype = "dashed") +
+  
+  facet_wrap( ~ parameter, scales = "free", ncol = 2) +
+  # Manual scale definitions
+  scale_fill_manual(
+    name = NULL,
+    values = c("ROPE\n(Region of Practical Equivalence)" = "orange")
+  ) +
+  scale_colour_manual(name = NULL,
+                      values = c("95% HDI\n(Highest Density Interval)" = "blue")) +
+  labs(x = "Posterior value", y = "Density", title = "Posterior Distributions with 95% HDIs and ROPEs") +
+  theme_classic(base_size = 14) +
+  theme(
+    strip.text = element_text(size = 11, face = "bold", hjust = 0),
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.position = "right",
+    legend.box = "vertical"
+  ) +
+  guides(colour = guide_legend(order = 1, override.aes = list(size = 2)),
+         fill = guide_legend(order = 2))
+
+#save ROPE HDI Plot
+ggsave(
+  filename = file.path(savemodel_output_path,"ROPHDIPlot.jpeg"),
+  plot = ROPEHDI ,
+  width = 12,
+  height = 6
+)
+
+```
+
+
+```{r Supplementary ROPE analysis: using ETI not HDI, echo=FALSE}
+
+
+#This Sensitivity analysis was conducted in which equal-tailed intervals (ETIs) were used in the ROPE decision framework
+#and compared to results using HDIs because of possible transformation incoherence (Etz et al., 2024).
+
+#Analysis repeats same ROPE analysis above except decision rule is using  ETIs instead to HDIs to confirm robustness of conclusions 
+#(See Etz et al., 2024 and Manuscript for more details for sensitivity analysis)
+
+
+# Load fitted model
+fit_FormatToD_mixModel <- readRDS(
+  file.path(savemodel_output_path, "FormatToD_mixModel_final.rds")
+)
+
+# Extract posterior draws
+post_ToDExp_draws <- as_draws_df(fit_FormatToD_mixModel)
+
+# Define ROPEs (Same used as above)
+delta_kappa <- 0.10
+rope_kappa  <- c(-delta_kappa, delta_kappa)
+
+delta_theta <- 0.35
+rope_theta  <- c(-delta_theta, delta_theta)
+
+# Parameters of interest
+params <- list(
+  theta_tod = list(par = "b_theta1_AgeGroupOld:ToD_ConditionNight", rope = rope_theta),
+  theta_format = list(par = "b_theta1_AgeGroupOld:formatNon_Video", rope = rope_theta),
+  kappa_tod = list(par = "b_kappa1_AgeGroupOld:ToD_ConditionNight", rope = rope_kappa),
+  kappa_format = list(par = "b_kappa1_AgeGroupOld:formatNon_Video", rope = rope_kappa)
+)
+
+summarise_parameter <- function(draws, rope, ci = 0.95) {
+  #compute Equal-Tailed-Interval (ETI)
+  # Uses the coherent quantile interval suggested by Etz et al. (2024)
+  h <- bayestestR::eti(draws, ci = ci)
+  
+  data.frame(
+    posterior_mean = mean(draws),
+    
+    #define ETI bounds
+    eti_low  = h$CI_low,
+    eti_high = h$CI_high,
+    
+    #Directional Probabilities
+    p_positive = mean(draws > 0),
+    p_negative = mean(draws < 0),
+    
+    # Evidence relative to ROPE boundaries
+    p_rope         = mean(draws >= rope[1] & draws <= rope[2]),
+    p_meaningful   = mean(draws < rope[1] | draws > rope[2]),
+    #ROPE boundaries
+    rope_low       = rope[1],
+    rope_high      = rope[2]
+  )
+}
+#loop across parameters and compute ETI-based ROPE summaries
+ROPE_results_V2 <- bind_rows(lapply(names(params), function(nm) {
+  par_name <- params[[nm]]$par
+  rope_val <- params[[nm]]$rope
+  
+  draws <- post_ToDExp_draws[[par_name]]
+  
+  out <- summarise_parameter(draws = draws, rope = rope_val)
+  
+  out$parameter <- nm
+  
+  out
+})) %>%
+  #  ETI-ROPE Decision Rule
+  mutate(
+    decision = case_when(
+      # Rule 1: ETI is completely inside ROPE -> Practical equivalence
+      eti_low >= rope_low & eti_high <= rope_high ~ "Accept Null",
+      
+      # Rule 2: ETI is completely outside ROPE -> Meaningful effect
+      eti_high < rope_low | eti_low > rope_high ~ "Reject Null",
+      
+      # Rule 3: ETI and ROPE overlap -> Insufficient data to decide/Inconclusive
+      TRUE ~ "Undecided"
+    )
+  ) %>%
+  select(
+    parameter,
+    posterior_mean,
+    eti_low,
+    eti_high,
+    p_positive,
+    p_negative,
+    p_meaningful,
+    p_rope,
+    rope_low,
+    rope_high,
+    decision
+  )
+
+#view results
+print(ROPE_results_V2)
+
+
+#save ROPE ETI summary results csv and rds
+write.csv(
+  ROPE_results,
+  file = file.path(savemodel_output_path, "posterior_ROPE2_summary.csv"),
+  row.names = FALSE
+)
+
+saveRDS(
+  ROPE_results, file=file.path(savemodel_output_path, "posterior_ROPE2_summary.rds")
+)
+```

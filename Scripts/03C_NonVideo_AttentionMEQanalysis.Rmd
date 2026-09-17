@@ -1,0 +1,137 @@
+---
+title: "NonVideoAttentionAnalysis"
+output: html_document
+date: "2026-06-28"
+---
+
+```{r important libraries, include=FALSE}
+# Clear console
+rm(list = ls())
+
+# knitr defaults
+knitr::opts_chunk$set(echo = TRUE)
+
+#load packages
+library(tidyverse)
+library(data.table)
+library(readxl)
+library(reshape2)
+library(lattice)
+
+library(ggpubr)
+library(flextable)
+
+library(broom)
+library(car)
+
+library(here)
+
+```
+
+
+```{r update directories based on where folders are located, echo=FALSE}
+
+#directory configuration change base_path to path where folders are located with respective data
+
+base_path<-"C:/Users/julia/OneDrive/Desktop" #change location as needed
+
+ToD_NonVideoData_Dir <- file.path(base_path, "Cleaned_ToD_NonVideoData")
+Attention_nonVideo<-file.path(ToD_NonVideoData_Dir,"Attention") #where attention data is located for non-video
+ToD_Video_NonVideo_Dir<- file.path(base_path, "ToD_Video_NonVideo_Data")
+
+
+```
+
+
+```{r Load in Attention data, MEQ data, score attention checks, then run model, echo=FALSE}
+
+
+#This code is for supplementary non-video attention check analysis
+
+
+#load in memory sleep data
+NonvideoAttention<- read.csv(file.path(Attention_nonVideo,"AllParticipants_Attention_NonVideo.csv"))
+
+NonvideoAttention<-NonvideoAttention%>%
+rename(SubID=subject_ID)
+
+
+#load in memory sleep data
+MemData_Sleep_NonVideo_Overall<- read.csv(file.path(ToD_Video_NonVideo_Dir,"Memory_Sleep_Demo_Vid_NonVid_FinalData.csv"))
+
+MEQ_NonVideo<-MemData_Sleep_NonVideo_Overall%>%
+  filter(ExpFormat=="Non_Video")%>%
+  select(SubID,MEQScore:MatchCondition)
+
+Attention_MEQ<-merge(MEQ_NonVideo,NonvideoAttention, by="SubID")
+  
+#count number of attention checks passed: total of 6 3 learning and 3 recall phase
+Attention_MEQ$attention_checks_passed <- rowSums(Attention_MEQ[, c(
+  "attention1_pass",
+  "attention1a_pass",
+  "attention2_pass",
+  "attention2a_pass",
+  "attention3_pass",
+  "attention3a_pass"
+)] == TRUE)
+
+Attention_MEQ$AgeGroup <- as.factor(Attention_MEQ$AgeGroup)
+Attention_MEQ$MatchCondition <- as.factor(Attention_MEQ$MatchCondition)
+Attention_MEQ$ToD_Condition <- as.factor(Attention_MEQ$ToD_Condition)
+
+#test if older and younger adults differ in number of passed attention checks
+t.test(attention_checks_passed ~ AgeGroup, data = Attention_MEQ)
+
+aggregate(attention_checks_passed ~ AgeGroup, data = Attention_MEQ, mean)
+
+#Set contrasts 
+options(contrasts = c("contr.sum", "contr.poly"))
+
+#fit model with type 3 sums squares
+Attention_MatchModel <- aov(attention_checks_passed ~ MatchCondition* AgeGroup , data = Attention_MEQ)
+
+Anova(Attention_MatchModel, type = 3)
+
+
+#save attention and memory data
+write.csv(Attention_MEQ, 
+            file = file.path(Attention_nonVideo,"Attention_MEQ_NonVideo.csv"), 
+            row.names = FALSE)
+
+
+#plots to view attention data: plot one is percent and plot two is distribution
+Attention_Percent <- Attention_MEQ %>%
+  mutate(full_pass = attention_checks_passed == 6) %>%
+  group_by(AgeGroup, MatchCondition) %>%
+  summarise(
+    pct_full = mean(full_pass) * 100
+  )
+
+ggplot(Attention_Percent , aes(x = MatchCondition, y = pct_full, fill = AgeGroup)) +
+  geom_col(position = "dodge") +
+  scale_fill_manual(values = c("#4E79A7", "#F28E2B")) +
+  labs(x = "Synchrony Condition",
+       y = "Percent Passing All Attention Checks",
+       fill = "Age Group") +
+  theme_minimal(base_size = 14)
+
+
+Attention_distribution<- Attention_MEQ %>%
+  group_by(AgeGroup, attention_checks_passed) %>%
+  summarise(n = n()) %>%
+  mutate(pct = n / sum(n) * 100)
+
+ggplot(Attention_distribution, aes(x = factor(attention_checks_passed),
+                    y = pct,
+                    fill = AgeGroup)) +
+  geom_col(position = "dodge") +
+  scale_fill_manual(values = c("#4E79A7", "#F28E2B")) +
+  labs(x = "Attention Checks Passed",
+       y = "Percent of Participants",
+       fill = "Age Group") +
+  theme_minimal(base_size = 14)
+
+
+
+```
+
