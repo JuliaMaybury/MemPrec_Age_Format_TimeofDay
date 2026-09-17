@@ -13,6 +13,7 @@ Overview of Scripts and Data:
 **4. Script 02D:** Creates trial-by-trial dataframe (combined Video and Non-Video) used for Bayesian Hierarchical Modelling ("NonVideo_Video_TrialData_SleepData_Final.csv" located in ToD_Video_NonVideo_Data folder) 
 
 **4. Script 03A:** Bayesian Hierarchical Modelling Script. Uses trial-by-trial data located in ToD_Video_NonVideo_Data (NonVideo_Video_TrialData_SleepData_Final.csv)
+ HModelResults and HMPlots Folder (inside ToD_Video_NonVideo): Contains a summary of Models 1 and 2 and associated plots
 
 **5. Script 03B:** ROPE (Region of practical equivalence) analysis
 
