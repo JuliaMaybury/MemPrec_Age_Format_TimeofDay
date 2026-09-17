@@ -1,0 +1,11 @@
+"obj1","backgr","obj1loc","TrialID","StudyTrialNum","block","testObj1","testObj1Feat1","TestPracTrialNum","testObj1Feat1TargetVal","testObj1LocStartVal1","testObj1LocStartVal2","testObj1LocStartVal3","testObj1LocTargetVal","testObj1Target","testObj1Foil","testObj1FCOrder","testObj1FCleftItem","testObj1FCrightItem","NewObject","OldImages","testNewLocStartVal"
+"chinesefood1_tr.png","Bckg139.jpg",170,1,1,1,1,NA,1,170,213,103,146,170,"chinesefood1_tr.png",NA,0,"Target","Foil",NA,1,NA
+"cheese1_tr.png","Bckg140.jpg",321,2,2,2,1,NA,2,321,22,203,95,321,"cheese1_tr.png",NA,1,"Foil","Target",NA,1,NA
+"cowboyhat1_tr.png","Bckg142.jpg",276,3,3,3,1,NA,3,276,213,218,234,276,"cowboyhat1_tr.png",NA,1,"Foil","Target",NA,1,NA
+"minifan1_tr.png","Bckg143.jpg",134,5,4,4,1,NA,4,134,56,265,92,134,"minifan1_tr.png",NA,1,"Foil","Target",NA,1,NA
+"blackboard1_tr.png","Bckg141.jpg",196,4,5,5,1,NA,5,196,105,22,282,196,"blackboard1_tr.png",NA,0,"Target","Foil",NA,1,NA
+NA,NA,NA,NA,NA,1,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,"New_lollipop1_tr.png",0,101
+NA,NA,NA,NA,NA,2,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,"New_mirror1_tr.png",0,313
+NA,NA,NA,NA,NA,3,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,"New_pencilholder1_tr.png",0,16
+NA,NA,NA,NA,NA,4,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,"New_remote1_tr.png",0,121
+NA,NA,NA,NA,NA,5,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,"New_rooster1_tr.png",0,138
