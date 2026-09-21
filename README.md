@@ -22,13 +22,16 @@ Overview of Scripts and Data generated from each:
 
 **5. Script 03B:** ROPE (Region of practical equivalence) analysis
 
-**6. Script 03C:** Supplementary Non-Video attention analysis.[ Attention Data found here.](https://github.com/JuliaMaybury/MemPrec_Age_Format_TimeofDay/blob/1ff094e3af34cbc366d85f41c95b15920f61265b/Cleaned_ToD_NonVideoData/Attention/Attention_MEQ_NonVideo.csv)
-
-Note: Directories can be configured at the start of each script based on where the cleaned learning_recall data folders are located.
-
-Final datasets used for analyses (combined video and non-video formats) can be found in: [ToD_Video_NonVideo_Data folder](https://github.com/JuliaMaybury/MemPrec_Age_Format_TimeofDay/tree/1ff094e3af34cbc366d85f41c95b15920f61265b/ToD_Video_NonVideo_Data)
+**6. Script 03C:** Supplementary Non-Video attention analysis. [Attention data found here. ](https://github.com/JuliaMaybury/MemPrec_Age_Format_TimeofDay/tree/03949d1d0f45fb13c3d51eb78d77c258aac6ccd3/Cleaned_ToD_NonVideoData/Attention)
 
 **Memory Task:**
 
 Code and materials used for the [video](https://github.com/JuliaMaybury/MemPrec_Age_Format_TimeofDay/tree/6e4d3e0a0464d4ffcd2a027c91af34f58ce8f101/PrecisionTask_VideoFormat) and [non-video](https://github.com/JuliaMaybury/MemPrec_Age_Format_TimeofDay/tree/c09b796a466750bb4d2727c1ab35840a425b137e/PrecisionTask_NonVideoFormat) precision task. 
+
+Note: 
+
+Directories can be configured at the start of each script based on where the cleaned learning_recall data folders are located.
+
+Final datasets used for analyses (combined video and non-video formats) can be found in: [ToD_Video_NonVideo_Data folder](https://github.com/JuliaMaybury/MemPrec_Age_Format_TimeofDay/tree/1ff094e3af34cbc366d85f41c95b15920f61265b/ToD_Video_NonVideo_Data)
+
 
