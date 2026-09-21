@@ -14,7 +14,7 @@ Overview of Scripts and Data:
 
 **4. Script 03A:** Bayesian Hierarchical Modelling Script. Uses trial-by-trial data located in ToD_Video_NonVideo_Data (NonVideo_Video_TrialData_SleepData_Final.csv)
  
- HModelResults and HMPlots Folder (inside ToD_Video_NonVideo): Contains a summary of Models 1 and 2 and associated plots
+[ HModelResults ](https://github.com/JuliaMaybury/MemPrec_Age_Format_TimeofDay/tree/83f9fdaa57c129bd9b539055f81ca1453d016430/ToD_Video_NonVideo_Data/HModelResults)and HMPlots Folder: Contains a summary of Models 1 and 2 and associated plots
 
 **5. Script 03B:** ROPE (Region of practical equivalence) analysis
 
